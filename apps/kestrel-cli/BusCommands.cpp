@@ -9,6 +9,7 @@
 
 #include <QEventLoop>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QJsonValue>
 #include <QTimer>
 
@@ -568,6 +569,221 @@ int deviceProgMode(Invocation& inv)
 		});
 }
 
+/// Unsigned number in decimal or 0x-hex, at most `max`.
+std::optional<uint> parseNumber(const QString& text, uint max)
+{
+	bool ok = false;
+	const uint value = text.toUInt(&ok, 0);
+	if (!ok || value > max)
+	{
+		return std::nullopt;
+	}
+	return value;
+}
+
+QString objectTypeName(uint type)
+{
+	switch (type)
+	{
+		case 0: return u"device"_s;
+		case 1: return u"address table"_s;
+		case 2: return u"association table"_s;
+		case 3: return u"application program"_s;
+		case 4: return u"interface program"_s;
+		case 5: return u"object association table"_s;
+		case 6: return u"router"_s;
+		case 7: return u"LTE address routing table"_s;
+		case 8: return u"cEMI server"_s;
+		case 9: return u"group object table"_s;
+		case 10: return u"polling master"_s;
+		case 11: return u"KNXnet/IP parameter"_s;
+		case 13: return u"file server"_s;
+		case 17: return u"security"_s;
+		case 19: return u"RF medium"_s;
+		default: return u"type %1"_s.arg(type);
+	}
+}
+
+QString loadStateName(uint state)
+{
+	switch (state)
+	{
+		case 0: return u"unloaded"_s;
+		case 1: return u"loaded"_s;
+		case 2: return u"loading"_s;
+		case 3: return u"error"_s;
+		case 4: return u"unloading"_s;
+		case 5: return u"load completing"_s;
+		default: return u"state %1"_s.arg(state);
+	}
+}
+
+uint beUInt(const QByteArray& bytes)
+{
+	uint value = 0;
+	for (const char byte : bytes)
+	{
+		value = (value << 8) | static_cast<uint>(static_cast<std::uint8_t>(byte));
+	}
+	return value;
+}
+
+int deviceProperty(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto device = parseIa(inv, inv.args[0], exitCode);
+	if (!device)
+	{
+		return exitCode;
+	}
+	const auto object = parseNumber(inv.args[1], 255);
+	const auto pid = parseNumber(inv.args[2], 255);
+	const auto count = parseNumber(inv.value(u"count"_s), 15);
+	const auto start = parseNumber(inv.value(u"start"_s), 0x0FFF);
+	if (!object || !pid || !count || *count == 0 || !start)
+	{
+		return inv.out.failure(kExitUsage, u"invalid object index, property id, --count (1..15) or --start"_s,
+			u"Usage"_s);
+	}
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.readManagement(*device,
+				{app::ManagementRead::property(static_cast<std::uint8_t>(*object), static_cast<std::uint8_t>(*pid),
+					static_cast<std::uint8_t>(*count), static_cast<std::uint16_t>(*start))},
+				[&, finish](Result<QList<Result<QByteArray>>> results)
+				{
+					if (!results)
+					{
+						finish(inv.out.failure(busExitCode(results.error()), results.error()));
+						return;
+					}
+					const Result<QByteArray>& data = results->front();
+					if (!data)
+					{
+						finish(inv.out.failure(busExitCode(data.error()), data.error()));
+						return;
+					}
+					finish(inv.out.success({{u"object"_s, int(*object)}, {u"pid"_s, int(*pid)}, {u"data"_s, hex(*data)}},
+						hex(*data)));
+				});
+		});
+}
+
+int deviceMemory(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto device = parseIa(inv, inv.args[0], exitCode);
+	if (!device)
+	{
+		return exitCode;
+	}
+	const auto address = parseNumber(inv.args[1], 0xFFFF);
+	const auto length = parseNumber(inv.args[2], 0x1000);
+	if (!address || !length || *length == 0 || *address + *length > 0x10000)
+	{
+		return inv.out.failure(kExitUsage, u"invalid address or length (16-bit range, length 1..4096)"_s, u"Usage"_s);
+	}
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.readManagement(*device,
+				{app::ManagementRead::memory(static_cast<std::uint16_t>(*address), static_cast<std::uint16_t>(*length))},
+				[&, finish](Result<QList<Result<QByteArray>>> results)
+				{
+					if (!results)
+					{
+						finish(inv.out.failure(busExitCode(results.error()), results.error()));
+						return;
+					}
+					const Result<QByteArray>& data = results->front();
+					if (!data)
+					{
+						finish(inv.out.failure(busExitCode(data.error()), data.error()));
+						return;
+					}
+					QStringList lines;
+					for (qsizetype offset = 0; offset < data->size(); offset += 16)
+					{
+						lines.append(u"%1  %2"_s.arg(*address + uint(offset), 4, 16, QLatin1Char('0'))
+								.arg(hex(data->mid(offset, 16))));
+					}
+					finish(inv.out.success(
+						{{u"address"_s, int(*address)}, {u"length"_s, int(*length)}, {u"data"_s, hex(*data)}},
+						lines.join(u'\n')));
+				});
+		});
+}
+
+int deviceObjects(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto device = parseIa(inv, inv.args[0], exitCode);
+	if (!device)
+	{
+		return exitCode;
+	}
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			// One connection per object index; stop at the first index without PID_OBJECT_TYPE.
+			auto objects = std::make_shared<QJsonArray>();
+			auto lines = std::make_shared<QStringList>();
+			auto next = std::make_shared<std::function<void(int)>>();
+			*next = [&, objects, lines, next, finish](int index)
+			{
+				const auto i = static_cast<std::uint8_t>(index);
+				session.readManagement(*device,
+					{
+						app::ManagementRead::property(i, 1),  // PID_OBJECT_TYPE
+						app::ManagementRead::property(i, 5),  // PID_LOAD_STATE_CONTROL
+						app::ManagementRead::property(i, 7),  // PID_TABLE_REFERENCE
+						app::ManagementRead::property(i, 13), // PID_PROGRAM_VERSION
+					},
+					[&, objects, lines, next, finish, index](Result<QList<Result<QByteArray>>> results)
+					{
+						if (!results)
+						{
+							finish(inv.out.failure(busExitCode(results.error()), results.error()));
+							return;
+						}
+						const auto& r = *results;
+						if (!r[0] || index >= 32)
+						{
+							finish(inv.out.success({{u"address"_s, qs(device->toString())}, {u"objects"_s, *objects}},
+								lines->isEmpty() ? u"no interface objects readable"_s : lines->join(u'\n')));
+							next->operator=(nullptr); // break the self-reference
+							return;
+						}
+						const uint type = beUInt(*r[0]);
+						QJsonObject object{{u"index"_s, index}, {u"type"_s, int(type)},
+							{u"typeName"_s, objectTypeName(type)}};
+						QString line = u"%1  %2"_s.arg(index, 2).arg(objectTypeName(type), -26);
+						if (r[1])
+						{
+							const uint state = r[1]->isEmpty() ? 0 : uint(static_cast<std::uint8_t>(r[1]->front()));
+							object.insert(u"loadState"_s, loadStateName(state));
+							line += u"  load: %1"_s.arg(loadStateName(state));
+						}
+						if (r[2])
+						{
+							object.insert(u"tableReference"_s, hex(*r[2]));
+							line += u"  table: 0x%1"_s.arg(beUInt(*r[2]), 4, 16, QLatin1Char('0'));
+						}
+						if (r[3])
+						{
+							object.insert(u"programVersion"_s, hex(*r[3]));
+							line += u"  version: %1"_s.arg(hex(*r[3]));
+						}
+						objects->append(object);
+						lines->append(line);
+						(*next)(index + 1);
+					});
+			};
+			(*next)(0);
+		});
+}
+
 } // namespace
 
 std::vector<Command> busCommands()
@@ -583,6 +799,9 @@ std::vector<Command> busCommands()
 	const QCommandLineOption monitorDpt(u"dpt"_s, u"Decode a group address with a DPT: ga=dpt (repeatable)."_s, u"ga=dpt"_s);
 	const QCommandLineOption programTimeout(u"timeout"_s,
 		u"Seconds to wait for a device in programming mode (default 60)."_s, u"s"_s, u"60"_s);
+	const QCommandLineOption propCount(u"count"_s, u"Number of elements (default 1)."_s, u"n"_s, u"1"_s);
+	const QCommandLineOption propStart(u"start"_s, u"First element index (default 1; 0 reads the element count)."_s,
+		u"i"_s, u"1"_s);
 	const QCommandLineOption progModeTimeout(u"timeout"_s, u"Seconds to collect answers (default 3)."_s, u"s"_s, u"3"_s);
 	const QCommandLineOption overwrite(u"overwrite"_s, u"Program even if another device already uses the address."_s);
 
@@ -600,6 +819,13 @@ std::vector<Command> busCommands()
 			{kInterfaceOption, programTimeout, overwrite}, programIa},
 		{{u"device"_s, u"info"_s}, {u"ia"_s}, u"Read mask version, serial number and manufacturer (FR-COM-4)."_s,
 			{kInterfaceOption}, deviceInfo},
+		{{u"device"_s, u"objects"_s}, {u"ia"_s},
+			u"List the interface objects with type, load state, table reference and program version (read-only)."_s,
+			{kInterfaceOption}, deviceObjects},
+		{{u"device"_s, u"property"_s}, {u"ia"_s, u"object"_s, u"pid"_s},
+			u"Read a property value as hex (read-only)."_s, {kInterfaceOption, propCount, propStart}, deviceProperty},
+		{{u"device"_s, u"memory"_s}, {u"ia"_s, u"address"_s, u"length"_s},
+			u"Read device memory as a hex dump (read-only; numbers may be 0x-hex)."_s, {kInterfaceOption}, deviceMemory},
 		{{u"device"_s, u"progmode"_s}, {},
 			u"List the addresses of the devices in programming mode (read-only; FR-COM-1)."_s,
 			{kInterfaceOption, progModeTimeout}, deviceProgMode},

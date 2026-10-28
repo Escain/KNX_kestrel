@@ -118,6 +118,11 @@ void ManagementSession::startNext(TimePoint now)
 		m_sendSeq = 0;
 		m_recvSeq = 0;
 		m_anyAcked = false;
+		// A connection left open by an earlier client run with our address (crash, interface teardown
+		// before the T_Disconnect went out) would keep the device's sequence numbers, so the device would
+		// take our first request for a repetition and never answer. A T_Disconnect from anyone but the
+		// device's current partner is ignored, so closing first is always safe.
+		transmit(Tpdu::disconnect(), now);
 		transmit(Tpdu::connect(), now);
 	}
 	m_request = buildRequest(operation);

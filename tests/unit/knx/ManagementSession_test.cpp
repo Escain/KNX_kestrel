@@ -53,8 +53,8 @@ UNIT_TEST(FR_COM_4__managementDeviceDescriptorRead)
 	auto session = newSession();
 	const auto id = session.deviceDescriptorRead(kT0);
 	auto actions = session.takeActions();
-	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::connect(), Tpdu::dataConnected(0, deviceDescriptorRead())}));
-	ASSERT_EQ(cemi::encode(std::get<Session::SendFrame>(actions[1]).frame), hex("11 00 b0 60 00 00 11 05 01 43 00"));
+	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::disconnect(), Tpdu::connect(), Tpdu::dataConnected(0, deviceDescriptorRead())}));
+	ASSERT_EQ(cemi::encode(std::get<Session::SendFrame>(actions[2]).frame), hex("11 00 b0 60 00 00 11 05 01 43 00"));
 	ASSERT(session.connected());
 
 	session.onFrame(fromDevice(Tpdu::ack(0)), kT0 + 50ms);
@@ -64,6 +64,19 @@ UNIT_TEST(FR_COM_4__managementDeviceDescriptorRead)
 	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::ack(0)}));
 	ASSERT_EQ(only<Session::Completed>(actions), (std::vector<Session::Completed>{{id, hex("07 05")}}));
 	ASSERT_FALSE(session.busy());
+}
+
+UNIT_TEST(FR_COM_4__managementClosesStaleConnectionBeforeConnecting)
+{
+	// A connection left open by an earlier run with our address keeps the device's sequence numbers; the
+	// device would take our seq-0 request for a repetition (seen on a real System B actuator).
+	auto session = newSession();
+	(void)session.deviceDescriptorRead(kT0);
+	auto actions = session.takeActions();
+	const auto tpdus = sent(actions);
+	ASSERT(tpdus.size() >= std::size_t{2});
+	ASSERT_EQ(tpdus[0], Tpdu::disconnect());
+	ASSERT_EQ(tpdus[1], Tpdu::connect());
 }
 
 UNIT_TEST(FR_COM_4__managementResponseBeforeAck)
@@ -225,7 +238,7 @@ UNIT_TEST(FR_COM_4__managementMemoryReadIsChunked)
 	auto session = newSession();
 	const auto id = session.memoryRead(0x4000, 20, kT0);
 	auto actions = session.takeActions();
-	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::connect(), Tpdu::dataConnected(0, memoryRead(0x4000, 12))}));
+	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::disconnect(), Tpdu::connect(), Tpdu::dataConnected(0, memoryRead(0x4000, 12))}));
 
 	Bytes first(12);
 	for (std::size_t i = 0; i < first.size(); ++i)
@@ -256,7 +269,7 @@ UNIT_TEST(FR_COM_2__managementMemoryWriteIsChunked)
 	const auto id = session.memoryWrite(0x0100, data, kT0);
 	auto actions = session.takeActions();
 	ASSERT_EQ(sent(actions),
-		(std::vector<Tpdu>{Tpdu::connect(), Tpdu::dataConnected(0, memoryWrite(0x0100, Bytes(12, 0xAB)))}));
+		(std::vector<Tpdu>{Tpdu::disconnect(), Tpdu::connect(), Tpdu::dataConnected(0, memoryWrite(0x0100, Bytes(12, 0xAB)))}));
 	session.onFrame(fromDevice(Tpdu::ack(0)), kT0);
 	actions = session.takeActions();
 	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::dataConnected(1, memoryWrite(0x010C, Bytes(3, 0xAB)))}));
@@ -337,7 +350,7 @@ UNIT_TEST(FR_COM_4__managementPropertyValueRead)
 	auto session = newSession();
 	const auto id = session.propertyValueRead(0, 11, 1, 1, kT0);
 	auto actions = session.takeActions();
-	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::connect(), Tpdu::dataConnected(0, propertyValueRead(0, 11, 1, 1))}));
+	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::disconnect(), Tpdu::connect(), Tpdu::dataConnected(0, propertyValueRead(0, 11, 1, 1))}));
 	session.onFrame(fromDevice(Tpdu::ack(0)), kT0);
 	session.onFrame(
 		fromDevice(Tpdu::dataConnected(0, propertyValueResponse(0, 11, 1, 1, hex("00 83 00 00 12 34")))), kT0);
@@ -358,7 +371,7 @@ UNIT_TEST(FR_COM_5__managementRestartDisconnects)
 	auto session = newSession();
 	const auto id = session.restart(kT0);
 	auto actions = session.takeActions();
-	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::connect(), Tpdu::dataConnected(0, restart())}));
+	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::disconnect(), Tpdu::connect(), Tpdu::dataConnected(0, restart())}));
 	session.onFrame(fromDevice(Tpdu::ack(0)), kT0);
 	actions = session.takeActions();
 	ASSERT_EQ(only<Session::Completed>(actions), (std::vector<Session::Completed>{{id, {}}}));
@@ -369,7 +382,7 @@ UNIT_TEST(FR_COM_5__managementRestartDisconnects)
 
 	// A later request opens a fresh connection with sequence numbers reset.
 	(void)session.deviceDescriptorRead(kT0 + 1s);
-	ASSERT_EQ(sent(session.takeActions()), (std::vector<Tpdu>{Tpdu::connect(), Tpdu::dataConnected(0, deviceDescriptorRead())}));
+	ASSERT_EQ(sent(session.takeActions()), (std::vector<Tpdu>{Tpdu::disconnect(), Tpdu::connect(), Tpdu::dataConnected(0, deviceDescriptorRead())}));
 }
 
 UNIT_TEST(FR_COM_4__managementIdleDisconnect)

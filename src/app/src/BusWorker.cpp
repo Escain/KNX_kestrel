@@ -2,6 +2,7 @@
 
 #include "kestrel/bus/Logging.hpp"
 
+#include <QEventLoop>
 #include <QHostInfo>
 
 #include <algorithm>
@@ -16,6 +17,9 @@ namespace
 {
 
 constexpr int kTickMs = 50;
+
+/// How long disconnect() waits for queued frames (e.g. a final T_Disconnect) to reach the bus.
+constexpr std::chrono::milliseconds kDrainTimeout{1500};
 
 QByteArray toByteArray(ByteView bytes)
 {
@@ -102,9 +106,70 @@ void BusWorker::connectTo(const QString& host, quint16 port, BusSession::StatusC
 	}
 }
 
+void BusWorker::closeDeviceConnections()
+{
+	for (auto& op : m_infos)
+	{
+		if (!op->finished)
+		{
+			finishInfo(*op, Result<DeviceInfo>(makeError(ErrorCode::Cancelled, "disconnected from the interface")));
+		}
+	}
+	std::erase_if(m_infos, [](const std::unique_ptr<InfoOp>& op) { return op->finished; });
+	for (auto& op : m_mgmtReads)
+	{
+		finishManagementRead(*op);
+	}
+	m_mgmtReads.clear();
+}
+
 void BusWorker::disconnect()
 {
+	closeDeviceConnections();
+	m_disconnectDeadline = knx::Clock::now() + kDrainTimeout;
+	ensureTimer();
+	disconnectWhenDrained();
+}
+
+void BusWorker::disconnectWhenDrained()
+{
+	if (!m_disconnectDeadline)
+	{
+		return;
+	}
+	if (m_link->state() == knx::LinkState::Connected && m_link->pendingFrames() > 0
+		&& knx::Clock::now() < *m_disconnectDeadline)
+	{
+		return;
+	}
+	m_disconnectDeadline.reset();
 	m_link->disconnectFromInterface();
+}
+
+void BusWorker::shutdown()
+{
+	if (m_link->state() != knx::LinkState::Connected)
+	{
+		return;
+	}
+	disconnect();
+	QEventLoop loop;
+	QTimer poll;
+	poll.setInterval(10);
+	QObject::connect(&poll, &QTimer::timeout, &loop,
+		[this, &loop]
+		{
+			disconnectWhenDrained();
+			if (!m_disconnectDeadline)
+			{
+				loop.quit();
+			}
+		});
+	poll.start();
+	if (m_disconnectDeadline)
+	{
+		loop.exec();
+	}
 }
 
 void BusWorker::onLinkState(knx::LinkState state)
@@ -164,6 +229,13 @@ void BusWorker::failAll(const Error& error)
 	{
 		deliver(scan.done, Result<QList<knx::IndividualAddress>>(Unexpected{error}));
 	}
+	for (auto& op : std::exchange(m_mgmtReads, {}))
+	{
+		if (!op->finished)
+		{
+			deliver(op->done, Result<QList<Result<QByteArray>>>(Unexpected{error}));
+		}
+	}
 }
 
 // --- Frames ------------------------------------------------------------------------------------------------
@@ -201,6 +273,7 @@ void BusWorker::onLinkConfirm(bool ok)
 	{
 		pending.done(ok);
 	}
+	disconnectWhenDrained();
 }
 
 void BusWorker::onLinkFrame(const knx::cemi::LData& frame)
@@ -261,6 +334,15 @@ void BusWorker::onLinkFrame(const knx::cemi::LData& frame)
 		}
 	}
 	std::erase_if(m_infos, [](const std::unique_ptr<InfoOp>& op) { return op->finished; });
+	for (auto& op : m_mgmtReads)
+	{
+		if (!op->finished)
+		{
+			op->session->onFrame(frame, now);
+			pumpManagementRead(*op);
+		}
+	}
+	std::erase_if(m_mgmtReads, [](const std::unique_ptr<ManagementReadOp>& op) { return op->finished; });
 }
 
 void BusWorker::record(const knx::cemi::LData& frame, bool outgoing)
@@ -595,11 +677,130 @@ void BusWorker::pumpInfo(InfoOp& op)
 	}
 }
 
+// --- Generic management reads ------------------------------------------------------------------------------
+
+void BusWorker::readManagement(knx::IndividualAddress device, QList<ManagementRead> reads,
+	BusSession::ManagementReadCallback done)
+{
+	if (m_link->state() != knx::LinkState::Connected)
+	{
+		deliver(done, Result<QList<Result<QByteArray>>>(notConnected()));
+		return;
+	}
+	if (reads.isEmpty())
+	{
+		deliver(done, Result<QList<Result<QByteArray>>>(QList<Result<QByteArray>>{}));
+		return;
+	}
+	auto op = std::make_unique<ManagementReadOp>();
+	op->session = std::make_unique<knx::ManagementSession>(device);
+	op->session->setLocalAddress(m_link->address());
+	op->done = std::move(done);
+	op->remaining = reads.size();
+	op->results.resize(reads.size(), Result<QByteArray>(makeError(ErrorCode::Cancelled, "not run")));
+	const knx::TimePoint now = knx::Clock::now();
+	for (const ManagementRead& read : std::as_const(reads))
+	{
+		op->ids.push_back(read.kind == ManagementRead::Kind::Property
+				? op->session->propertyValueRead(read.objectIndex, read.propertyId, read.count, read.startIndex, now)
+				: op->session->memoryRead(read.address, read.length, now));
+	}
+	ManagementReadOp& ref = *op;
+	m_mgmtReads.push_back(std::move(op));
+	ensureTimer();
+	pumpManagementRead(ref);
+	std::erase_if(m_mgmtReads, [](const std::unique_ptr<ManagementReadOp>& o) { return o->finished; });
+}
+
+void BusWorker::finishManagementRead(ManagementReadOp& op)
+{
+	if (op.finished)
+	{
+		return;
+	}
+	op.finished = true;
+	op.session->close(knx::Clock::now());
+	for (auto& action : op.session->takeActions())
+	{
+		if (const auto* send = std::get_if<knx::ManagementSession::SendFrame>(&action))
+		{
+			(void)sendFrame(send->frame);
+		}
+	}
+	deliver(op.done, Result<QList<Result<QByteArray>>>(std::move(op.results)));
+}
+
+void BusWorker::pumpManagementRead(ManagementReadOp& op)
+{
+	const auto indexOf = [&op](knx::ManagementSession::RequestId id) -> qsizetype
+	{
+		const auto it = std::find(op.ids.begin(), op.ids.end(), id);
+		return it == op.ids.end() ? -1 : static_cast<qsizetype>(it - op.ids.begin());
+	};
+	while (!op.finished)
+	{
+		auto actions = op.session->takeActions();
+		if (actions.empty())
+		{
+			return;
+		}
+		for (auto& action : actions)
+		{
+			if (op.finished)
+			{
+				break;
+			}
+			if (const auto* send = std::get_if<knx::ManagementSession::SendFrame>(&action))
+			{
+				if (const Status sent = sendFrame(send->frame); !sent)
+				{
+					for (auto& result : op.results)
+					{
+						if (!result && result.error().code == ErrorCode::Cancelled)
+						{
+							result = Result<QByteArray>(Unexpected{sent.error()});
+						}
+					}
+					finishManagementRead(op);
+				}
+			}
+			else if (const auto* completed = std::get_if<knx::ManagementSession::Completed>(&action))
+			{
+				if (const qsizetype i = indexOf(completed->id); i >= 0)
+				{
+					op.results[i] = toByteArray(completed->data);
+					if (--op.remaining == 0)
+					{
+						finishManagementRead(op);
+					}
+				}
+			}
+			else if (const auto* failed = std::get_if<knx::ManagementSession::Failed>(&action))
+			{
+				if (const qsizetype i = indexOf(failed->id); i >= 0)
+				{
+					op.results[i] = Result<QByteArray>(Unexpected{failed->error});
+					if (--op.remaining == 0)
+					{
+						finishManagementRead(op);
+					}
+				}
+			}
+			else if (std::holds_alternative<knx::ManagementSession::Disconnected>(action))
+			{
+				// Requests still queued were failed by the session before it reported the disconnect.
+				finishManagementRead(op);
+			}
+		}
+	}
+}
+
 // --- Timer -------------------------------------------------------------------------------------------------
 
 void BusWorker::onTick()
 {
 	const knx::TimePoint now = knx::Clock::now();
+	disconnectWhenDrained();
 	for (auto it = m_reads.begin(); it != m_reads.end();)
 	{
 		if (now >= it->deadline)
@@ -639,6 +840,15 @@ void BusWorker::onTick()
 		}
 	}
 	std::erase_if(m_infos, [](const std::unique_ptr<InfoOp>& op) { return op->finished; });
+	for (auto& op : m_mgmtReads)
+	{
+		if (!op->finished)
+		{
+			op->session->tick(now);
+			pumpManagementRead(*op);
+		}
+	}
+	std::erase_if(m_mgmtReads, [](const std::unique_ptr<ManagementReadOp>& op) { return op->finished; });
 }
 
 // --- Discovery ---------------------------------------------------------------------------------------------

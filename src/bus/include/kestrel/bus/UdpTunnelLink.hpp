@@ -49,6 +49,8 @@ public:
 	knx::LinkState state() const { return m_state; }
 	/// Individual address assigned by the server (valid when connected).
 	knx::IndividualAddress address() const { return m_client.address(); }
+	/// Frames queued or waiting for their L_Data.con.
+	std::size_t pendingFrames() const { return m_client.pendingFrames(); }
 	QHostAddress remoteHost() const { return m_remoteHost; }
 	quint16 remotePort() const { return m_remotePort; }
 	/// Human-readable reason of the last unrequested disconnect (empty otherwise).

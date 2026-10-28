@@ -296,6 +296,12 @@ void VirtualDevice::onTransport(knx::IndividualAddress source, const Tpdu& tpdu)
 			sendTo(source, Tpdu::disconnect()); // busy: one connection at a time
 			return;
 		}
+		if (fromPartner)
+		{
+			// Already connected to this partner: keep the sequence numbers, as a real System B actuator
+			// does (specs/04 field notes). A client must T_Disconnect a stale connection first.
+			return;
+		}
 		m_partner = source;
 		m_sendSeq = 0;
 		m_recvSeq = 0;

@@ -109,3 +109,14 @@ link. Search, tunnelling, device info, `device progmode` and `program-ia` all wo
   and the response arrive before the L_Data.con of our request. The session already handles a response that
   overtakes the T_ACK.
 - `kestrel.bus.frames=true` (`QT_LOGGING_RULES`) logs every KNXnet/IP datagram as hex.
+- **Stale transport connection.** A client run that ended before its T_Disconnect reached the bus left the
+  MEAN WELL actuator (System B) connected to our tunnel address. The actuator ignores a T_Connect from its
+  current partner and keeps its sequence numbers, so the next run's seq-0 request looked like a repetition:
+  it got a T_ACK and no answer. Every second CLI run failed. Fixes: `BusSession` drains queued frames before
+  closing the tunnel (`disconnectFromInterface()`, and the destructor), and `ManagementSession` sends
+  T_Disconnect before every T_Connect. The simulator now reproduces the device's behaviour.
+- **Unloaded actuator.** The actuator's interface objects 1–4 report load state 0 (unloaded), although its
+  address and association tables contain a regular 8-channel layout: 1/0/x switch and 2/0/x status, object
+  stride 18. Group telegrams to those addresses get a negative L_Data.con (ctrl1 `0x9d`): nobody
+  acknowledges them on TP. An unloaded device does not take part in group communication, so a full download
+  is needed. Read-only tools for this: `kestrel-cli device objects|property|memory`.

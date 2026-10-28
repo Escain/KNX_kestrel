@@ -71,6 +71,35 @@ struct DeviceInfo
 	friend bool operator==(const DeviceInfo&, const DeviceInfo&) = default;
 };
 
+/// One read-only management request (property value or memory), see BusSession::readManagement().
+struct ManagementRead
+{
+	enum class Kind
+	{
+		Property,
+		Memory,
+	};
+	Kind kind = Kind::Property;
+	std::uint8_t objectIndex = 0;
+	std::uint8_t propertyId = 0;
+	std::uint8_t count = 1;
+	std::uint16_t startIndex = 1;
+	std::uint16_t address = 0;
+	std::uint16_t length = 0;
+
+	static ManagementRead property(std::uint8_t objectIndex, std::uint8_t propertyId, std::uint8_t count = 1,
+		std::uint16_t startIndex = 1)
+	{
+		return {Kind::Property, objectIndex, propertyId, count, startIndex, 0, 0};
+	}
+	static ManagementRead memory(std::uint16_t address, std::uint16_t length)
+	{
+		return {Kind::Memory, 0, 0, 0, 0, address, length};
+	}
+
+	friend bool operator==(const ManagementRead&, const ManagementRead&) = default;
+};
+
 std::ostream& operator<<(std::ostream& os, const GroupReadResult& result);
 std::ostream& operator<<(std::ostream& os, const DeviceInfo& info);
 std::ostream& operator<<(std::ostream& os, const TelegramRecord& record);
@@ -88,6 +117,8 @@ public:
 	using DeviceInfoCallback = std::function<void(Result<DeviceInfo>)>;
 	using DiscoveryCallback = std::function<void(Result<QList<bus::DiscoveredInterface>>)>;
 	using AddressListCallback = std::function<void(Result<QList<knx::IndividualAddress>>)>;
+	/// One result per request, in order; the outer error is only "not connected".
+	using ManagementReadCallback = std::function<void(Result<QList<Result<QByteArray>>>)>;
 
 	struct ProgramOptions
 	{
@@ -144,6 +175,9 @@ public:
 	/// Read-only: broadcasts A_IndividualAddress_Read and collects every answer for `window`, i.e. the
 	/// addresses of the devices in programming mode, in arrival order. One address listed twice means two
 	/// devices share it.
+	/// Read-only: runs `reads` in order over one transport connection to `device`. Each read succeeds or
+	/// fails on its own (a refused property does not stop the rest); a lost connection fails the remainder.
+	void readManagement(knx::IndividualAddress device, QList<ManagementRead> reads, ManagementReadCallback done);
 	void readProgrammingMode(AddressListCallback done, std::chrono::milliseconds window = std::chrono::milliseconds(3000));
 
 	// --- Discovery (FR-BUS-1) ---------------------------------------------------------------------------------

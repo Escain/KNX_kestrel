@@ -1,6 +1,6 @@
 # Libraries, listed bottom-up (see specs/02-architecture.md for the dependency rules).
 # A directory is only added once it has a CMakeLists.txt, so layers can land incrementally.
-set(KESTREL_CORE_LIBS base knx dpt sim model persist validate bus simnet app)
+set(KESTREL_CORE_LIBS base knx dpt sim archive model persist validate catalog bus simnet app)
 set(KESTREL_GUI_LIBS viewmodels qml shell)
 
 foreach(lib IN LISTS KESTREL_CORE_LIBS)

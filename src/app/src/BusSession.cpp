@@ -22,8 +22,15 @@ BusSession::BusSession(QObject* parent) : QObject(parent), m_shared(std::make_sh
 
 BusSession::~BusSession()
 {
-	// Delete the worker (and with it the link, which says goodbye to the interface) on its own thread.
-	QMetaObject::invokeMethod(m_worker, [worker = m_worker] { delete worker; }, Qt::BlockingQueuedConnection);
+	// Let queued frames (the T_Disconnect of a device connection) go out, then delete the worker (and with it
+	// the link, which says goodbye to the interface) on its own thread.
+	QMetaObject::invokeMethod(m_worker,
+		[worker = m_worker]
+		{
+			worker->shutdown();
+			delete worker;
+		},
+		Qt::BlockingQueuedConnection);
 	m_worker = nullptr;
 	m_thread.quit();
 	m_thread.wait();
@@ -74,6 +81,12 @@ void BusSession::cancelProgramming()
 void BusSession::readDeviceInfo(knx::IndividualAddress device, DeviceInfoCallback done)
 {
 	post([device, done = std::move(done)](detail::BusWorker& w) mutable { w.readDeviceInfo(device, std::move(done)); });
+}
+
+void BusSession::readManagement(knx::IndividualAddress device, QList<ManagementRead> reads, ManagementReadCallback done)
+{
+	post([device, reads = std::move(reads), done = std::move(done)](detail::BusWorker& w) mutable
+		{ w.readManagement(device, std::move(reads), std::move(done)); });
 }
 
 void BusSession::readProgrammingMode(AddressListCallback done, std::chrono::milliseconds window)

@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace kestrel::app::detail
@@ -36,7 +37,12 @@ public:
 	~BusWorker() override;
 
 	void connectTo(const QString& host, quint16 port, BusSession::StatusCallback done);
+	/// Closes open device connections, lets queued frames go out (at most kDrainTimeout), then
+	/// disconnects the tunnel.
 	void disconnect();
+	/// Like disconnect(), but blocks (running this thread's events) until the queue is drained; called
+	/// right before the worker is destroyed.
+	void shutdown();
 	void groupWrite(knx::GroupAddress address, dpt::DptId dpt, const dpt::DptValue& value,
 		BusSession::StatusCallback done);
 	void groupRead(knx::GroupAddress address, dpt::DptId dpt, std::chrono::milliseconds timeout,
@@ -45,6 +51,8 @@ public:
 		BusSession::ProgramCallback done, BusSession::ProgressCallback progress);
 	void cancelProgramming();
 	void readDeviceInfo(knx::IndividualAddress device, BusSession::DeviceInfoCallback done);
+	void readManagement(knx::IndividualAddress device, QList<ManagementRead> reads,
+		BusSession::ManagementReadCallback done);
 	void readProgrammingMode(std::chrono::milliseconds window, BusSession::AddressListCallback done);
 	void discover(const BusSession::DiscoveryOptions& options, BusSession::DiscoveryCallback done);
 
@@ -66,6 +74,15 @@ private:
 		knx::TimePoint deadline;
 		QList<knx::IndividualAddress> found;
 		BusSession::AddressListCallback done;
+	};
+	struct ManagementReadOp
+	{
+		std::unique_ptr<knx::ManagementSession> session;
+		std::vector<knx::ManagementSession::RequestId> ids;
+		QList<Result<QByteArray>> results;
+		qsizetype remaining = 0;
+		BusSession::ManagementReadCallback done;
+		bool finished = false;
 	};
 	struct InfoOp
 	{
@@ -101,6 +118,10 @@ private:
 	void pumpProgrammer();
 	void pumpInfo(InfoOp& op);
 	void finishInfo(InfoOp& op, Result<DeviceInfo> result);
+	void pumpManagementRead(ManagementReadOp& op);
+	void closeDeviceConnections();
+	void disconnectWhenDrained();
+	void finishManagementRead(ManagementReadOp& op);
 	void failAll(const Error& error);
 
 	BusSession* m_session;
@@ -119,6 +140,8 @@ private:
 
 	std::vector<std::unique_ptr<InfoOp>> m_infos;
 	std::vector<ProgModeScan> m_scans;
+	std::vector<std::unique_ptr<ManagementReadOp>> m_mgmtReads;
+	std::optional<knx::TimePoint> m_disconnectDeadline;
 };
 
 } // namespace kestrel::app::detail

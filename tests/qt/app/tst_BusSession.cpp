@@ -302,6 +302,48 @@ private Q_SLOTS:
 		QVERIFY(waitFor([&] { return !m_sim->device("switch-a")->connectionPartner().has_value(); }));
 	}
 
+	void fr_com_4__readManagementReportsEachRequest()
+	{
+		QVERIFY(connectSession());
+		Outcome<Result<QList<Result<QByteArray>>>> reads;
+		m_session->readManagement(knx::IndividualAddress(0x1101),
+			{app::ManagementRead::property(0, 11), app::ManagementRead::property(0, 200),
+				app::ManagementRead::property(0, 12)},
+			reads.callback());
+		QVERIFY(reads.wait(15000));
+		QVERIFY(reads.value->has_value());
+		const auto& results = **reads.value;
+		QCOMPARE(results.size(), 3);
+		QVERIFY(results[0].has_value());
+		QCOMPARE(*results[0], QByteArray::fromHex("ffff00001234"));
+		QVERIFY(!results[1].has_value()); // refused property: only this request fails
+		QVERIFY(results[2].has_value());
+		QCOMPARE(*results[2], QByteArray::fromHex("ffff"));
+	}
+
+	void fr_com_4__closingSessionDisconnectsDevice()
+	{
+		// The CLI pattern: one session per command. Closing must still get the final T_Disconnect onto the
+		// bus, or the device keeps a stale connection (specs/04 field notes). The destructor drains through
+		// the same path, but blocks this thread, which also runs the in-process simulator.
+		QVERIFY(connectSession());
+		Outcome<Result<app::DeviceInfo>> info;
+		m_session->readDeviceInfo(knx::IndividualAddress(0x1101), info.callback());
+		QVERIFY(info.wait(15000));
+		QVERIFY(info.value->has_value());
+		m_session->disconnectFromInterface();
+		QVERIFY(waitFor([&] { return m_session->state() == knx::LinkState::Disconnected; }));
+		QVERIFY(!m_sim->device("switch-a")->connectionPartner().has_value());
+		m_session.reset();
+
+		m_session = std::make_unique<app::BusSession>();
+		QVERIFY(connectSession());
+		Outcome<Result<app::DeviceInfo>> again;
+		m_session->readDeviceInfo(knx::IndividualAddress(0x1101), again.callback());
+		QVERIFY(again.wait(15000));
+		QVERIFY(again.value->has_value());
+	}
+
 	void fr_com_4__deviceInfoOfMissingDeviceFails()
 	{
 		QVERIFY(connectSession());
