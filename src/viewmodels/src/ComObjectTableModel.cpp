@@ -82,6 +82,7 @@ QVariant ComObjectTableModel::cellData(EntityRef ref, int column, int role) cons
 		case DptRole: return object.dpt;
 		case AddressRole: return groupAddressesText(object.id);
 		case IconRole: return u"comobject"_s;
+		case ExtraRole: return false;
 		default: return {};
 	}
 }

@@ -167,7 +167,7 @@ QStringList TopologyPanelVM::contextActions(model::EntityRef ref) const
 			return {u"topology.addDevice"_s, u"catalog.addToLine"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
 		case model::EntityKind::Device:
 			return {u"device.open"_s, u"topology.addDevice"_s, u"catalog.addToLine"_s, sep, u"device.programAddress"_s,
-				u"device.download"_s, u"device.readInfo"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
+				u"device.download"_s, u"device.readConfiguration"_s, u"device.readInfo"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
 		default: return {u"topology.addArea"_s};
 	}
 }

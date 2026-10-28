@@ -70,6 +70,31 @@ Pane {
 				elide: Text.ElideRight
 				text: root.vm.applicationText
 			}
+			Label {
+				text: qsTr("Download")
+				opacity: 0.7
+				visible: root.vm.downloadState !== ""
+			}
+			Label {
+				objectName: "deviceEditor.downloadState"
+				Layout.fillWidth: true
+				visible: text !== ""
+				elide: Text.ElideRight
+				text: root.vm.downloadState
+				font.bold: root.vm.needsDownload
+				color: root.vm.needsDownload ? "#ef6c00" : palette.windowText
+			}
+		}
+
+		Label {
+			objectName: "deviceEditor.inactiveWarning"
+			Layout.fillWidth: true
+			visible: root.vm.catalogDevice && root.vm.inactiveLinkedCount > 0
+			wrapMode: Text.Wrap
+			color: "#ef6c00"
+			text: root.vm.inactiveLinkedCount === 1
+				? qsTr("1 linked group object is not active with the current parameters (greyed): its group addresses are kept but not downloaded.")
+				: qsTr("%1 linked group objects are not active with the current parameters (greyed): their group addresses are kept but not downloaded.").arg(root.vm.inactiveLinkedCount)
 		}
 
 		RowLayout {
@@ -183,8 +208,10 @@ Pane {
 							required property bool selected
 							required property bool current
 							required property bool editing
+							required property bool inactive
 
 							implicitHeight: label.implicitHeight + 10
+							opacity: cell.inactive ? 0.45 : 1
 							color: cell.row === table.dropRow ? table.palette.highlight
 								: cell.selected ? table.palette.highlight
 								: (cell.row % 2 ? table.palette.alternateBase : table.palette.base)

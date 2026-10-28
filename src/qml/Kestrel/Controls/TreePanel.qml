@@ -14,6 +14,7 @@ Pane {
 	property string accessibleName: viewName
 	property list<string> toolActions
 	property real secondaryColumnWidth: 72
+	property list<real> secondaryColumnWidths
 
 	padding: 0
 
@@ -52,6 +53,7 @@ Pane {
 			viewName: root.viewName
 			accessibleName: root.accessibleName
 			secondaryColumnWidth: root.secondaryColumnWidth
+			secondaryColumnWidths: root.secondaryColumnWidths
 		}
 	}
 }

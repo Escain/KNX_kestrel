@@ -30,6 +30,7 @@ class CatalogPanelVM;
 class CatalogService;
 class CommissioningVM;
 class DeviceEditorVM;
+class DeviceStatusService;
 class GroupAddressPanelVM;
 class ProblemsPanelVM;
 class ProjectSession;
@@ -60,6 +61,7 @@ public:
 	app::BusSession* bus() const { return m_bus.get(); }
 	BusConnectionVM* busConnection() const { return m_busConnection.get(); }
 	CatalogService* catalog() const { return m_catalog.get(); }
+	DeviceStatusService* deviceStatus() const { return m_deviceStatus.get(); }
 	CatalogPanelVM* catalogPanel() const { return m_catalogPanel.get(); }
 	CommissioningVM* commissioning() const { return m_commissioning.get(); }
 
@@ -103,6 +105,7 @@ private:
 	std::unique_ptr<ActionRegistry> m_actions;
 	std::unique_ptr<app::BusSession> m_bus;
 	std::unique_ptr<CatalogService> m_catalog;
+	std::unique_ptr<DeviceStatusService> m_deviceStatus;
 	ActiveComObjectFilter m_comObjectFilter;
 	std::unique_ptr<BuildingsPanelVM> m_buildings;
 	std::unique_ptr<TopologyPanelVM> m_topology;

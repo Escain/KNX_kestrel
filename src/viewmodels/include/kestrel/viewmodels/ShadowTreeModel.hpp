@@ -74,6 +74,8 @@ public:
 
 	/// Rebuilds the shadow tree from the project (model reset).
 	void rebuild();
+	/// dataChanged for the row of an entity (state computed outside the project changed).
+	void refreshEntity(model::EntityRef ref);
 
 protected:
 	ShadowTreeModel(ProjectSession* session, QStringList columns, QObject* parent);

@@ -17,7 +17,10 @@ Problems / Catalog / Commissioning / Bus Connection (bottom, tabbed)
 3. Device editor (double-click a device): parameters, and links between group objects and group addresses
    (type an address, pick one, or drag it from the Group Addresses dock).
 4. Bus Connection: search for interfaces or enter host:port, connect.
-5. Commissioning: program the individual address, download the application, read device info.
+5. Commissioning: program the individual address, download the application, read device info. An installation
+   configured with another tool can be taken over with *Read Configuration from Device*.
+6. The Topology *Download* column and the editor header show which devices need a download. Problems lists linked
+   com objects that the parameters deactivated.
 
 `MainWindow::kLayoutVersion` is 3 (the Catalog and Commissioning docks were added).
 
@@ -64,6 +67,11 @@ number, the first in document order wins. Rows are keyed by `ComObjectRef` id an
   in the innermost group range). The first link of an object is the sending one.
 - **Drag** a group address from the Group Addresses dock (`application/x-kestrel-ref`, data = `ga-…`) onto a row.
 - **Unlink**: removing the last link of a catalog com object also removes its model `ComObject` in the same step.
+- **Inactive linked objects**: a linked com object that a parameter change deactivated (its `ComObjectRef` is not
+  active in `appconfig::evaluate`) stays in the table, greyed, with a warning above the table. Its links are kept but
+  not downloaded (appconfig drops them), and they are never deleted automatically. Unlink them to clear the warning.
+
+The header also shows the device's download state (§5).
 
 **Parameters tab.** The active `ParameterRef`s (`appconfig::evaluate`), grouped under their channels and
 `ParameterBlock`s in the order of the Dynamic section. Refs with `Access="None"` are hidden and `Read` refs are
@@ -88,6 +96,7 @@ starts.
 |--------|----|----------|--------------|
 | Program Individual Address | `device.programAddress` | Ctrl+Shift+P | connected, idle, target device has an address |
 | Download Application | `device.download` | Ctrl+Shift+D | … and the device has an application program |
+| Read Configuration from Device | `device.readConfiguration` | | connected, idle, addressed catalog device |
 | Read Device Info | `device.readInfo` | | connected, idle, addressed target |
 | Show Devices in Programming Mode | `bus.programmingMode` | | connected, idle |
 | Cancel Bus Operation | `device.cancelOperation` | | IA programming or a download is running |
@@ -101,12 +110,41 @@ starts.
   planner the action reports that the configuration generator is not available. Success records
   `downloadedHash = planHash(plan)` (SHA-256 of the plan's exact content).
 - **Read device info** records the serial number.
+- **Read configuration from device** (System B only) follows the sequence of `kestrel-cli device import`:
+  1. Read PID 7 (table reference) and PID 27 (memory control block) of objects 1..4, plus PID 13 (program version) of
+     object 4. A different manufacturer or application number fails. A different version is reported as a warning.
+  2. Segment sizes come from the first 4 octets of PID 27. When that is 0, objects 1 and 3 use the u16 entry count
+     (2 + 2n bytes), object 2 uses 2 + 4n bytes, and object 4 uses the size of the application's `RelativeSegment`
+     with LSM 4.
+  3. Read the four segments.
+  4. `appconfig::importSystemBImages` runs on the GUI thread as one undo step and replaces the device's parameters,
+     com objects and links.
+  The product database is loaded off the GUI thread. There are 4 progress steps. Cancel takes effect at the next bus
+  answer (the running management request completes). The warnings go to the log and the error banner.
 
 Commissioning facts go through `Project::recordState`: the project becomes dirty, nothing is undoable. The actions are
 in the **Commissioning** menu and in the device context menus (Topology, Buildings). The tool bar has *Add Product to
 Line*, *Program Individual Address* and *Download Application*.
 
-## 5. Hooks
+## 5. Device status (FR-DEV-3)
+
+`DeviceStatusService` computes the status of catalog devices lazily and off the GUI thread. It starts at the first
+query (Topology column, editor header, Problems). After each change, a 250 ms debounce runs. Then a cheap fingerprint
+of every catalog device (application, parameters, com objects and links) selects the devices whose inputs changed. One
+worker thread then works on a snapshot copy of the project and computes, for each of these devices:
+
+- `planHash()` of the `DownloadPlanner`'s plan, but only for devices with a `downloadedHash`. Compared with
+  `DeviceState::downloadedHash`, it gives the download state: *Not loaded* (never downloaded by Kestrel), *Loaded*
+  (up to date), *Modified* (download needed), *…* (first computation), *?* (no planner, or the plan fails).
+- the linked com objects whose `ComObjectRef` is not active. They become **CO-101** warnings in Problems:
+  "Linked com object is not active with the device's parameters: its links are not downloaded".
+  `ProblemsModel::setExtraSource` merges them into the `validate::run()` results.
+
+Until a new result arrives, the previous one is shown, so typing in the parameter editor never waits and nothing
+flickers. A burst of edits costs one computation. Results of a batch that started before the project was replaced, the
+catalog changed or the planner changed are discarded.
+
+## 6. Hooks
 
 ```cpp
 // kestrel/viewmodels/ConfigurationHooks.hpp
@@ -117,20 +155,22 @@ void Workspace::setActiveComObjectFilter(ActiveComObjectFilter);  // default act
 void Workspace::setDownloadPlanner(DownloadPlanner);              // default catalogDownloadPlanner(catalog())
 ```
 
-## 6. Tests
+## 7. Tests
 - `qt.viewmodels.CatalogViewModels`: import, index reuse, bad files, filter, add to line with undo, drop on Topology,
-  active com objects, linking and unlinking with undo, parameters that change the active objects. Opt-in timing
+  active com objects, linking and unlinking with undo, parameters that change the active objects. Also: needs download
+  (planner off the GUI thread, debounced) and inactive linked objects (greyed, CO-101). Opt-in timing
   against real files through `KESTREL_PRIVATE_CORPUS`.
 - `qt.viewmodels.BusViewModels`: IA programming, cancel, device info, programming-mode listing, download without a
   planner, with an injected plan, refused by the device, and end to end (catalog + appconfig planner → simulator).
+  Read configuration: download a configuration, read it into a fresh project (parameters, com objects, links, one
+  undo step), and cancel. Up to date after a download, modified after a parameter edit.
 - `qt.shell.MainWindow`: every dock loads its view; the catalog dock, catalog device editor and commissioning dock
   in the real window (screenshots with `KESTREL_SCREENSHOT_DIR`).
 
-## 7. Open points
+## 8. Open points
 - Drag and drop uses `Drag.Automatic` (a platform drag between QQuickWidgets). The tests cover the drop intents, not
   the mouse gesture, which has only been checked offscreen.
-- A com object that becomes inactive after a parameter change keeps its model `ComObject` and links. There is no
-  warning yet.
 - Catalog texts are indexed in en-US. The device editor uses the project's content language.
-- No "Read configuration from device" action yet (`appconfig::importSystemBImages` exists).
-- No per-device "needs download" indicator yet (compare `downloadedHash` with the current plan).
+- Reading the configuration does not set `downloadedHash`, so the device then shows *Not loaded*. Comparing the read
+  images with the planned ones could mark it *Loaded*.
+- Cancel cannot interrupt a management request that is already running (`BusSession` has no cancel for it).

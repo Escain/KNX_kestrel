@@ -20,6 +20,7 @@
 #include "kestrel/viewmodels/GroupMonitorVM.hpp"
 #include "kestrel/viewmodels/ActionRegistry.hpp"
 #include "kestrel/viewmodels/DeviceEditorVM.hpp"
+#include "kestrel/viewmodels/DeviceStatusService.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
 #include "kestrel/viewmodels/SelectionService.hpp"
 #include "kestrel/viewmodels/TopologyPanelVM.hpp"
@@ -294,7 +295,8 @@ private Q_SLOTS:
 			names.append(action->isSeparator() ? u"-"_s : action->objectName());
 		QCOMPARE(names,
 			(QStringList{u"device.open"_s, u"topology.addDevice"_s, u"catalog.addToLine"_s, u"-"_s, u"device.programAddress"_s,
-				u"device.download"_s, u"device.readInfo"_s, u"-"_s, u"edit.rename"_s, u"edit.delete"_s}));
+				u"device.download"_s, u"device.readConfiguration"_s, u"device.readInfo"_s, u"-"_s, u"edit.rename"_s,
+				u"edit.delete"_s}));
 		QCOMPARE(window->workspace()->selection()->currentText(), model::EntityRef(m_ids.dimmer).toString());
 		menu->close();
 	}
@@ -494,10 +496,18 @@ private Q_SLOTS:
 		QVERIFY(parameters);
 		QTRY_VERIFY(parameters->property("count").toInt() > 5);
 		QVERIFY(editor->setParameter(u"M-FFFF_A-0001-10-0001_P-4_R-1"_s, u"2"_s));
-		QTRY_COMPARE(table->property("rows").toInt(), 2);
+		// Button A deactivated: two objects left, plus the linked switch object shown greyed with a warning.
+		QTRY_COMPARE(table->property("rows").toInt(), 3);
+		QObject* warning = findInHost(host, u"deviceEditor.inactiveWarning"_s);
+		QVERIFY(warning);
+		QTRY_VERIFY(warning->property("visible").toBool());
 		const QStringList unnamedParameters = unnamedInteractiveItems(host->rootObject());
 		QVERIFY2(unnamedParameters.isEmpty(), qPrintable(unnamedParameters.join(u", "_s)));
 		screenshot(*window, u"device-parameters"_s);
+		tabs->setProperty("currentIndex", 0);
+		showDock(*window, u"dock.problems"_s);
+		QTRY_VERIFY(ws->deviceStatus()->diagnostics().size() == 1); // CO-101, computed off the GUI thread
+		screenshot(*window, u"inactive-objects"_s);
 		QVERIFY(ws->session()->undo());
 		QTRY_COMPARE(table->property("rows").toInt(), 4);
 	}

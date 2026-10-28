@@ -24,11 +24,13 @@ CatalogComObjectModel::CatalogComObjectModel(ProjectSession* session, model::Id<
 
 QHash<int, QByteArray> CatalogComObjectModel::extraRoleNames() const
 {
-	return {{LinkedRole, "linked"}, {ComObjectRole, "comObject"}};
+	return {{LinkedRole, "linked"}, {ComObjectRole, "comObject"}, {InactiveRole, "inactive"}};
 }
 
-void CatalogComObjectModel::setObjects(std::vector<catalog::EffectiveComObject> objects, QHash<QString, QString> channelTexts)
+void CatalogComObjectModel::setObjects(
+	std::vector<catalog::EffectiveComObject> objects, QHash<QString, QString> channelTexts, QSet<QString> inactive)
 {
+	m_inactive = std::move(inactive);
 	QStringList keys;
 	QHash<QString, std::size_t> byRef;
 	std::vector<catalog::EffectiveComObject> unique;
@@ -111,7 +113,14 @@ QVariant CatalogComObjectModel::data(const QModelIndex& index, int role) const
 			const auto id = modelObject(key);
 			return id ? model::EntityRef(*id).toString() : QString();
 		}
-		case Qt::ToolTipRole: return u"%1\n%2"_s.arg(o->refId, o->name);
+		case InactiveRole: return m_inactive.contains(key);
+		case Qt::ToolTipRole:
+			if (m_inactive.contains(key))
+			{
+				return tr("Not active with the current parameters: its group addresses are not downloaded.\n%1")
+					.arg(o->refId);
+			}
+			return u"%1\n%2"_s.arg(o->refId, o->name);
 		case Qt::DisplayRole:
 			switch (index.column())
 			{

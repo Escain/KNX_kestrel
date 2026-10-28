@@ -1,5 +1,9 @@
 #include "kestrel/viewmodels/ProblemsModel.hpp"
 
+#include <algorithm>
+#include <iterator>
+#include <tuple>
+
 #include "kestrel/viewmodels/Format.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
 
@@ -116,10 +120,25 @@ QHash<int, QByteArray> ProblemsModel::roleNames() const
 	return names;
 }
 
+void ProblemsModel::setExtraSource(std::function<std::vector<validate::Diagnostic>()> source)
+{
+	m_extra = std::move(source);
+	scheduleRefresh();
+}
+
 void ProblemsModel::refresh()
 {
 	m_timer.stop();
 	std::vector<validate::Diagnostic> next = validate::run(m_session->project());
+	if (m_extra)
+	{
+		std::vector<validate::Diagnostic> extra = m_extra();
+		if (!extra.empty())
+		{
+			next.insert(next.end(), std::make_move_iterator(extra.begin()), std::make_move_iterator(extra.end()));
+			validate::sortDiagnostics(next);
+		}
+	}
 
 	// Keys, made unique by an occurrence counter (identical diagnostics are possible in imported data).
 	QStringList nextKeys;

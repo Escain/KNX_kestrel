@@ -49,7 +49,8 @@ Pane {
 				spacing: 2
 
 				Repeater {
-					model: ["device.programAddress", "device.download", "device.readInfo", "bus.programmingMode"]
+					model: ["device.programAddress", "device.download", "device.readConfiguration", "device.readInfo",
+						"bus.programmingMode"]
 					delegate: ActionButton {
 						required property string modelData
 						actions: root.vm.actions

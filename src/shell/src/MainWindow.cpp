@@ -208,8 +208,8 @@ void MainWindow::createMenus()
 	m_commissioningMenu = menuBar()->addMenu(tr("&Commissioning"));
 	m_commissioningMenu->setObjectName(u"menu.commissioning"_s);
 	add(m_commissioningMenu,
-		{u"device.programAddress"_s, u"device.download"_s, u"device.readInfo"_s, sep, u"bus.programmingMode"_s, sep,
-			u"device.cancelOperation"_s});
+		{u"device.programAddress"_s, u"device.download"_s, u"device.readConfiguration"_s, u"device.readInfo"_s, sep,
+			u"bus.programmingMode"_s, sep, u"device.cancelOperation"_s});
 
 	m_helpMenu = menuBar()->addMenu(tr("&Help"));
 	m_helpMenu->setObjectName(u"menu.help"_s);

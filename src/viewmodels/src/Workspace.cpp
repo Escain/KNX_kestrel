@@ -11,6 +11,9 @@
 #include "kestrel/viewmodels/CatalogService.hpp"
 #include "kestrel/viewmodels/CommissioningVM.hpp"
 #include "kestrel/viewmodels/DeviceEditorVM.hpp"
+#include "kestrel/viewmodels/DeviceStatusService.hpp"
+#include "kestrel/viewmodels/ProblemsModel.hpp"
+#include "kestrel/viewmodels/TopologyTreeModel.hpp"
 #include "kestrel/viewmodels/Format.hpp"
 #include "kestrel/viewmodels/GroupAddressPanelVM.hpp"
 #include "kestrel/viewmodels/ProblemsPanelVM.hpp"
@@ -35,6 +38,7 @@ Workspace::Workspace(QObject* parent, const QString& catalogDirectory)
 	, m_actions(std::make_unique<ActionRegistry>())
 	, m_bus(std::make_unique<app::BusSession>())
 	, m_catalog(std::make_unique<CatalogService>(catalogDirectory))
+	, m_deviceStatus(std::make_unique<DeviceStatusService>(m_session.get(), m_catalog.get()))
 	, m_comObjectFilter(&activeComObjects)
 {
 	const Services s = services();
@@ -48,6 +52,13 @@ Workspace::Workspace(QObject* parent, const QString& catalogDirectory)
 	m_catalogPanel = std::make_unique<CatalogPanelVM>(s, m_catalog.get());
 	m_commissioning = std::make_unique<CommissioningVM>(s, m_bus.get());
 	m_commissioning->setDownloadPlanner(catalogDownloadPlanner(m_catalog.get()));
+	m_commissioning->setCatalog(m_catalog.get());
+	m_commissioning->setDeviceStatus(m_deviceStatus.get());
+	m_deviceStatus->setPlanner(catalogDownloadPlanner(m_catalog.get()));
+	m_topology->topologyModel()->setDeviceStatus(m_deviceStatus.get());
+	ProblemsModel* problems = m_problems->problemsModel();
+	problems->setExtraSource([status = m_deviceStatus.get()] { return status->diagnostics(); });
+	connect(m_deviceStatus.get(), &DeviceStatusService::diagnosticsChanged, problems, &ProblemsModel::scheduleRefresh);
 	m_topology->setCatalogDropHandler(
 		[this](const QString& key, model::Id<model::Line> line) { return m_catalogPanel->addToLine(key, line); });
 
@@ -87,6 +98,7 @@ Workspace::~Workspace()
 	// View models disconnect from the services before those go away.
 	m_commissioning.reset();
 	m_catalogPanel.reset();
+	m_problems->problemsModel()->setExtraSource({});
 	m_busConnection.reset();
 	m_welcome.reset();
 	m_problems.reset();
@@ -103,7 +115,9 @@ Services Workspace::services() const
 
 std::unique_ptr<DeviceEditorVM> Workspace::createDeviceEditor(model::Id<model::Device> device)
 {
-	return std::make_unique<DeviceEditorVM>(services(), device, m_catalog.get(), m_comObjectFilter);
+	auto editor = std::make_unique<DeviceEditorVM>(services(), device, m_catalog.get(), m_comObjectFilter);
+	editor->setDeviceStatus(m_deviceStatus.get());
+	return editor;
 }
 
 void Workspace::setActiveComObjectFilter(ActiveComObjectFilter filter)
@@ -113,6 +127,7 @@ void Workspace::setActiveComObjectFilter(ActiveComObjectFilter filter)
 
 void Workspace::setDownloadPlanner(DownloadPlanner planner)
 {
+	m_deviceStatus->setPlanner(planner);
 	m_commissioning->setDownloadPlanner(std::move(planner));
 	updateActions();
 }
@@ -223,6 +238,8 @@ void Workspace::registerActions()
 		&QAction::triggered, this, [this] { m_commissioning->download(); });
 	connect(a.add(u"device.readInfo"_s, tr("Read Device &Info")), &QAction::triggered, this,
 		[this] { m_commissioning->readDeviceInfo(); });
+	connect(a.add(u"device.readConfiguration"_s, tr("Read &Configuration from Device")), &QAction::triggered, this,
+		[this] { m_commissioning->readConfiguration(); });
 	connect(a.add(u"device.cancelOperation"_s, tr("&Cancel Bus Operation")), &QAction::triggered,
 		m_commissioning.get(), &CommissioningVM::cancel);
 
@@ -285,8 +302,9 @@ void Workspace::updateActions()
 	a.setEnabled(u"bus.programmingMode"_s, idle);
 	a.setEnabled(u"device.programAddress"_s, addressedDevice && idle);
 	a.setEnabled(u"device.readInfo"_s, addressedDevice && idle);
-	a.setEnabled(u"device.download"_s,
-		addressedDevice && idle && !project.devices().at(*target).appProgramRef.isEmpty());
+	const bool catalogDevice = addressedDevice && !project.devices().at(*target).appProgramRef.isEmpty();
+	a.setEnabled(u"device.download"_s, catalogDevice && idle);
+	a.setEnabled(u"device.readConfiguration"_s, catalogDevice && idle);
 	a.setEnabled(u"device.cancelOperation"_s, m_commissioning->isCancellable());
 }
 

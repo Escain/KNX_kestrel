@@ -1,5 +1,6 @@
 #include "kestrel/viewmodels/TopologyTreeModel.hpp"
 
+#include "kestrel/viewmodels/DeviceStatusService.hpp"
 #include "kestrel/viewmodels/Format.hpp"
 
 #include <algorithm>
@@ -14,7 +15,7 @@ using model::EntityKind;
 using model::EntityRef;
 
 TopologyTreeModel::TopologyTreeModel(ProjectSession* session, QObject* parent)
-	: ShadowTreeModel(session, {tr("Name"), tr("Address"), tr("Medium")}, parent)
+	: ShadowTreeModel(session, {tr("Name"), tr("Address"), tr("Medium"), tr("Download")}, parent)
 {
 	rebuild();
 }
@@ -55,6 +56,13 @@ std::vector<EntityRef> TopologyTreeModel::childrenOf(EntityRef parent) const
 			result.emplace_back(id);
 	}
 	return result;
+}
+
+void TopologyTreeModel::setDeviceStatus(DeviceStatusService* status)
+{
+	m_status = status;
+	connect(status, &DeviceStatusService::deviceStatusChanged, this,
+		[this](model::Id<model::Device> device) { refreshEntity(device); });
 }
 
 std::optional<EntityRef> TopologyTreeModel::parentOf(EntityRef ref) const
@@ -100,12 +108,21 @@ QVariant TopologyTreeModel::cellData(EntityRef ref, int column, int role) const
 					const QString name = entityName(p, ref);
 					return name.isEmpty() ? kindName(ref.kind) : name;
 				}
-				case 1: return address();
-				case 2: return medium();
+				case AddressColumn: return address();
+				case MediumColumn: return medium();
+				case DownloadColumn:
+					return m_status && ref.kind == EntityKind::Device ? m_status->shortText(ref.as<model::Device>()) : QString();
 				default: return {};
 			}
 		case Qt::EditRole: return column == 0 ? entityName(p, ref) : QVariant();
-		case Qt::ToolTipRole: return entityLabel(p, ref);
+		case Qt::ToolTipRole:
+			if (m_status && ref.kind == EntityKind::Device)
+			{
+				const QString state = m_status->describe(ref.as<model::Device>());
+				if (!state.isEmpty())
+					return u"%1\n%2"_s.arg(entityLabel(p, ref), state);
+			}
+			return entityLabel(p, ref);
 		case AddressRole: return address();
 		case DescriptionRole:
 			return ref.kind == EntityKind::Device ? p.devices().at(ref.as<model::Device>()).description : QString();

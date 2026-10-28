@@ -64,8 +64,10 @@
       `downloadedHash`), device info, and devices in programming mode. The actions are in the device context menus
       (FR-COM-1/2/4).
 - [x] Bus Connection dock trimmed to connection and discovery; `bus.connect` and `bus.discover` actions.
-- [ ] "Needs download" per device (FR-DEV-3), partial download (FR-COM-3), "Read configuration from device"
-      (`appconfig::importSystemBImages`).
-- [ ] Warn about links on com objects that a parameter change made inactive.
+- [x] "Read Configuration from Device" (System B, the `device import` sequence, one undo step, progress, cancel).
+- [x] "Needs download" per device (FR-DEV-3): plan hash vs `downloadedHash`, computed lazily off the GUI thread
+      (Topology *Download* column, editor header, commissioning dock).
+- [x] Linked com objects that a parameter change deactivated: greyed in the editor and reported as CO-101 warnings.
+- [ ] Partial download (FR-COM-3).
 - [ ] Parameter editor: units/suffixes, `ParameterSeparator`s, text parameters in com object texts, modules.
 - [ ] Check the drag-and-drop gesture by hand on a desktop session (the tests cover only the drop intents).

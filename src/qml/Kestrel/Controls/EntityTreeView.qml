@@ -15,6 +15,8 @@ Item {
 	required property string viewName
 	property string accessibleName: viewName
 	property real secondaryColumnWidth: 72
+	/// Optional per-column widths of columns 1.. (overrides secondaryColumnWidth).
+	property list<real> secondaryColumnWidths
 	/// Levels expanded when a project is shown.
 	property int initialDepth: 2
 
@@ -68,9 +70,15 @@ Item {
 		selectionModel: ItemSelectionModel {
 			onCurrentChanged: (current, previous) => root.vm.selectIndex(current)
 		}
-		columnWidthProvider: column => column === 0
-			? Math.max(120, tree.width - (tree.columns - 1) * root.secondaryColumnWidth)
-			: root.secondaryColumnWidth
+		columnWidthProvider: column => {
+			const widthOf = c => c - 1 < root.secondaryColumnWidths.length ? root.secondaryColumnWidths[c - 1] : root.secondaryColumnWidth
+			if (column !== 0)
+				return widthOf(column)
+			let others = 0
+			for (let c = 1; c < tree.columns; ++c)
+				others += widthOf(c)
+			return Math.max(120, tree.width - others)
+		}
 		onWidthChanged: forceLayout()
 
 		ScrollBar.vertical: ScrollBar {}

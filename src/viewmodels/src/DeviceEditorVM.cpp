@@ -5,6 +5,7 @@
 #include "kestrel/viewmodels/CatalogService.hpp"
 #include "kestrel/viewmodels/ComObjectTableModel.hpp"
 #include "kestrel/viewmodels/DeviceParameterModel.hpp"
+#include "kestrel/viewmodels/DeviceStatusService.hpp"
 #include "kestrel/viewmodels/Format.hpp"
 #include "kestrel/viewmodels/GroupAddressPanelVM.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
@@ -199,8 +200,35 @@ void DeviceEditorVM::refreshComObjects()
 		return;
 	const model::Device& device = project().devices().at(m_device);
 	const QString language = project().settings().contentLanguage;
-	m_catalogModel->setObjects(m_filter(*m_program, device, language), m_channelTexts);
 	const auto evaluation = appconfig::evaluate(*m_program, parameterValues(*m_program, device));
+	std::vector<catalog::EffectiveComObject> objects = m_filter(*m_program, device, language);
+
+	// Linked com objects the parameters deactivated stay visible (greyed) so that their links can be removed.
+	QSet<QString> shown;
+	for (const catalog::EffectiveComObject& object : objects)
+		shown.insert(object.refId);
+	QSet<QString> inactive;
+	std::vector<catalog::EffectiveComObject> all;
+	for (const auto id : project().comObjectsOf(m_device))
+	{
+		const model::ComObject& object = project().comObjects().at(id);
+		if (object.catalogRef.isEmpty() || shown.contains(object.catalogRef) || project().linksOfComObject(id).empty())
+			continue;
+		if (evaluation && evaluation->isComObjectRefActive(object.catalogRef))
+			continue; // active, hidden by the filter (another ref of the same number is shown)
+		if (all.empty())
+			all = m_program->effectiveComObjects(language);
+		const auto found = std::find_if(all.begin(), all.end(), [&](const auto& e) { return e.refId == object.catalogRef; });
+		if (found == all.end())
+			continue;
+		inactive.insert(object.catalogRef);
+		shown.insert(object.catalogRef);
+		objects.push_back(*found);
+	}
+	std::stable_sort(objects.begin(), objects.end(), [](const auto& a, const auto& b) { return a.number < b.number; });
+	m_inactiveLinkedCount = static_cast<int>(inactive.size());
+	m_catalogModel->setObjects(std::move(objects), m_channelTexts, inactive);
+
 	if (evaluation)
 	{
 		m_parameters->setRows(parameterRows(*m_program, device, *evaluation, language));
@@ -217,6 +245,30 @@ void DeviceEditorVM::refreshComObjects()
 		m_currentObject.clear();
 		Q_EMIT currentChanged();
 	}
+}
+
+void DeviceEditorVM::setDeviceStatus(DeviceStatusService* status)
+{
+	m_status = status;
+	if (!m_status)
+		return;
+	connect(m_status, &DeviceStatusService::deviceStatusChanged, this,
+		[this](model::Id<model::Device> device)
+		{
+			if (device == m_device)
+				Q_EMIT downloadStateChanged();
+		});
+	Q_EMIT downloadStateChanged();
+}
+
+QString DeviceEditorVM::downloadState() const
+{
+	return m_status && isCatalogDevice() ? m_status->describe(m_device) : QString();
+}
+
+bool DeviceEditorVM::needsDownload() const
+{
+	return m_status && isCatalogDevice() && m_status->downloadState(m_device) == DeviceStatusService::DownloadState::NeedsDownload;
 }
 
 QString DeviceEditorVM::productText() const
@@ -797,9 +849,10 @@ void DeviceEditorVM::onChanged(const model::ChangeSet& changeSet)
 	{
 		m_current.reset();
 	}
-	if (changeSet.contains(model::EntityRef(m_device)))
+	if (changeSet.contains(model::EntityRef(m_device)) || changeSet.touches(model::EntityKind::Link)
+		|| changeSet.touches(model::EntityKind::ComObject))
 	{
-		// Application changed: reload; parameters changed: the active com objects may differ.
+		// Application changed: reload; parameters or links changed: the active (and greyed) objects may differ.
 		const QString programId = project().devices().at(m_device).appProgramRef;
 		if (programId != m_loadedProgram || m_catalogState != u"ready"_s)
 			loadCatalog();

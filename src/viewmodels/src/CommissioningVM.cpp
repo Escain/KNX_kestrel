@@ -1,11 +1,16 @@
 #include "kestrel/viewmodels/CommissioningVM.hpp"
 
 #include "kestrel/app/BusSession.hpp"
+#include "kestrel/appconfig/Images.hpp"
+#include "kestrel/appconfig/Import.hpp"
+#include "kestrel/viewmodels/CatalogService.hpp"
+#include "kestrel/viewmodels/DeviceStatusService.hpp"
 #include "kestrel/viewmodels/Format.hpp"
 
 #include <QPointer>
 #include <QTime>
 
+#include <array>
 #include <utility>
 
 using namespace Qt::StringLiterals;
@@ -42,7 +47,21 @@ void CommissioningVM::setDownloadPlanner(DownloadPlanner planner)
 
 bool CommissioningVM::isCancellable() const
 {
-	return m_kind == u"programAddress"_s || m_kind == u"download"_s;
+	return m_kind == u"programAddress"_s || m_kind == u"download"_s || m_kind == u"readConfiguration"_s;
+}
+
+void CommissioningVM::setDeviceStatus(DeviceStatusService* status)
+{
+	m_status = status;
+	if (m_status)
+	{
+		connect(m_status, &DeviceStatusService::deviceStatusChanged, this,
+			[this](model::Id<model::Device> device)
+			{
+				if (targetDevice() == device)
+					Q_EMIT targetChanged();
+			});
+	}
 }
 
 std::optional<model::Id<model::Device>> CommissioningVM::targetDevice() const
@@ -82,6 +101,8 @@ QString CommissioningVM::deviceStatus() const
 		parts.append(tr("Serial %1").arg(state.serial));
 	if (entity.appProgramRef.isEmpty())
 		parts.append(tr("No application program"));
+	else if (m_status)
+		parts.append(m_status->describe(*device));
 	else
 		parts.append(state.downloadedHash.isEmpty() ? tr("Application not downloaded") : tr("Application downloaded"));
 	return parts.join(u" · "_s);
@@ -422,8 +443,307 @@ void CommissioningVM::runDownload(model::Id<model::Device> device, knx::Individu
 		});
 }
 
+// --- Read configuration (System B) -----------------------------------------------------------------------
+
+namespace
+{
+
+std::uint32_t beValue(const QByteArray& bytes, qsizetype count)
+{
+	std::uint32_t value = 0;
+	for (qsizetype i = 0; i < std::min(count, bytes.size()); ++i)
+		value = (value << 8) | static_cast<std::uint8_t>(bytes[i]);
+	return value;
+}
+
+} // namespace
+
+struct CommissioningVM::ReadContext
+{
+	model::Id<model::Device> device;
+	knx::IndividualAddress address;
+	QString label;
+	QString programId;
+	std::shared_ptr<const catalog::LoadedDatabase> database;
+	const catalog::ApplicationProgram* app = nullptr;
+	std::array<std::uint32_t, 4> where{};
+	std::array<std::uint32_t, 4> size{};
+	QStringList notes;
+};
+
+bool CommissioningVM::stopIfCancelled(const QString& label)
+{
+	if (m_kind != u"readConfiguration"_s)
+		return true; // finished meanwhile (cannot happen: one operation at a time)
+	if (!m_cancelRequested)
+		return false;
+	finish(false, tr("Reading the configuration of %1 cancelled.").arg(label));
+	return true;
+}
+
+bool CommissioningVM::readConfiguration(const QString& deviceRef)
+{
+	std::optional<model::Id<model::Device>> device;
+	std::optional<knx::IndividualAddress> target;
+	if (!canStart(deviceRef, device, target))
+		return false;
+	const QString programId = project().devices().at(*device).appProgramRef;
+	if (programId.isEmpty())
+	{
+		setError(tr("The device has no application program. Add it from the catalog first."));
+		return false;
+	}
+	if (!m_catalog)
+	{
+		setError(tr("No product catalog is available."));
+		return false;
+	}
+	auto context = std::make_shared<ReadContext>();
+	context->device = *device;
+	context->address = *target;
+	context->label = entityLabel(project(), *device);
+	context->programId = programId;
+	start(u"readConfiguration"_s, tr("%1: reading the product file…").arg(context->label), 4);
+	// The product file may need parsing (about 0.7 s for real files): off the GUI thread.
+	QPointer<CommissioningVM> self(this);
+	CatalogService* catalog = m_catalog;
+	m_pool.start(
+		[self, catalog, context, receiver = this]
+		{
+			auto database = catalog->databaseForProgram(context->programId);
+			QMetaObject::invokeMethod(
+				receiver,
+				[self, context, database]
+				{
+					if (!self || self->stopIfCancelled(context->label))
+						return;
+					context->database = database;
+					context->app = database ? database->database.findApplicationProgram(context->programId) : nullptr;
+					if (!context->app)
+					{
+						self->setError(tr("The application program %1 is not in the catalog.").arg(context->programId));
+						self->finish(false, tr("Reading the configuration of %1 failed.").arg(context->label));
+						return;
+					}
+					if (context->app->maskVersion != u"MV-07B0"_s)
+					{
+						self->setError(tr("Only System B (MV-07B0) devices can be read yet; %1 uses %2.")
+										   .arg(context->label, context->app->maskVersion));
+						self->finish(false, tr("Reading the configuration of %1 failed.").arg(context->label));
+						return;
+					}
+					self->readProperties(context);
+				},
+				Qt::QueuedConnection);
+		});
+	return true;
+}
+
+void CommissioningVM::readProperties(std::shared_ptr<ReadContext> context)
+{
+	// 1. Where and how large the segments are: PID_TABLE_REFERENCE (7) and PID_MCB_TABLE (27) of objects 1..4,
+	//    and PID_PROGRAM_VERSION (13) of the application object.
+	setProgress(tr("%1: reading the segment table…").arg(context->label), 1, 4);
+	QList<app::ManagementRead> reads;
+	for (std::uint8_t object = 1; object <= 4; ++object)
+	{
+		reads.append(app::ManagementRead::property(object, download::kPidTableReference));
+		reads.append(app::ManagementRead::property(object, download::kPidMcbTable));
+	}
+	reads.append(app::ManagementRead::property(4, download::kPidProgramVersion));
+	QPointer<CommissioningVM> self(this);
+	m_bus->readManagement(context->address, reads,
+		[self, context](Result<QList<Result<QByteArray>>> results)
+		{
+			if (!self || self->stopIfCancelled(context->label))
+				return;
+			const QString failed = tr("Reading the configuration of %1 failed.").arg(context->label);
+			if (!results)
+			{
+				self->setError(errorText(results.error()));
+				self->finish(false, failed);
+				return;
+			}
+			const auto& r = *results;
+			const catalog::ApplicationProgram& app = *context->app;
+			const Bytes expected = appconfig::programVersion(context->database->database.manufacturerId, app);
+			if (r[8] && r[8]->size() == 5 && expected.size() == 5)
+			{
+				const QByteArray& version = *r[8];
+				for (int i = 0; i < 4; ++i)
+				{
+					if (static_cast<std::uint8_t>(version[i]) != expected[static_cast<std::size_t>(i)])
+					{
+						self->setError(tr("The device runs another application (%1), not %2.")
+										   .arg(QString::fromLatin1(version.toHex(' ')), app.id));
+						self->finish(false, failed);
+						return;
+					}
+				}
+				if (static_cast<std::uint8_t>(version[4]) != expected[4])
+				{
+					context->notes.append(tr("The device has application version %1, the product file %2.")
+											  .arg(static_cast<std::uint8_t>(version[4]), 2, 16, QLatin1Char('0'))
+											  .arg(expected[4], 2, 16, QLatin1Char('0')));
+				}
+			}
+			else
+			{
+				context->notes.append(tr("The device did not report its application version."));
+			}
+			// Sizes: PID_MCB_TABLE when the load procedure wrote one; otherwise the table header (u16 count) for
+			// objects 1..3 and the product file's segment size for the parameters.
+			QList<app::ManagementRead> headers;
+			QList<int> headerObjects;
+			for (int object = 0; object < 4; ++object)
+			{
+				const auto o = static_cast<std::size_t>(object);
+				if (!r[2 * object])
+				{
+					self->setError(tr("Object %1: the table reference is not readable.").arg(object + 1));
+					self->finish(false, failed);
+					return;
+				}
+				context->where[o] = beValue(*r[2 * object], 4);
+				context->size[o] = r[2 * object + 1] ? beValue(*r[2 * object + 1], 4) : 0;
+				if (context->size[o] != 0)
+					continue;
+				if (object == 3)
+				{
+					for (const catalog::RelativeSegment& segment : app.relativeSegments)
+					{
+						if (segment.loadStateMachine == 4)
+							context->size[3] = segment.size;
+					}
+				}
+				else
+				{
+					headers.append(app::ManagementRead::memory(static_cast<std::uint16_t>(context->where[o]), 2));
+					headerObjects.append(object);
+				}
+			}
+			if (headers.isEmpty())
+			{
+				self->readSegments(context);
+				return;
+			}
+			self->setProgress(tr("%1: reading the table sizes…").arg(context->label), 2, 4);
+			QPointer<CommissioningVM> again = self;
+			self->m_bus->readManagement(context->address, headers,
+				[again, context, headerObjects, failed](Result<QList<Result<QByteArray>>> counts)
+				{
+					if (!again || again->stopIfCancelled(context->label))
+						return;
+					if (!counts)
+					{
+						again->setError(errorText(counts.error()));
+						again->finish(false, failed);
+						return;
+					}
+					for (qsizetype i = 0; i < headerObjects.size(); ++i)
+					{
+						if (!(*counts)[i])
+						{
+							again->setError(errorText((*counts)[i].error()));
+							again->finish(false, failed);
+							return;
+						}
+						const int object = headerObjects[i];
+						const std::uint32_t entries = beValue(*(*counts)[i], 2);
+						const std::uint32_t entrySize = object == 1 ? 4u : 2u; // association pairs: 4 octets
+						context->size[static_cast<std::size_t>(object)] = 2 + entries * entrySize;
+					}
+					again->readSegments(context);
+				});
+		});
+}
+
+void CommissioningVM::readSegments(std::shared_ptr<ReadContext> context)
+{
+	// 2. The segments themselves.
+	const QString failed = tr("Reading the configuration of %1 failed.").arg(context->label);
+	QList<app::ManagementRead> memory;
+	for (std::size_t object = 0; object < 4; ++object)
+	{
+		if (context->where[object] + context->size[object] > 0x10000 || context->size[object] == 0)
+		{
+			setError(tr("Object %1: segment at 0x%2 with %3 bytes cannot be read.")
+						 .arg(object + 1)
+						 .arg(context->where[object], 0, 16)
+						 .arg(context->size[object]));
+			finish(false, failed);
+			return;
+		}
+		memory.append(app::ManagementRead::memory(
+			static_cast<std::uint16_t>(context->where[object]), static_cast<std::uint16_t>(context->size[object])));
+	}
+	setProgress(tr("%1: reading the memory…").arg(context->label), 3, 4);
+	QPointer<CommissioningVM> self(this);
+	m_bus->readManagement(context->address, memory,
+		[self, context, failed](Result<QList<Result<QByteArray>>> data)
+		{
+			if (!self || self->stopIfCancelled(context->label))
+				return;
+			if (!data)
+			{
+				self->setError(errorText(data.error()));
+				self->finish(false, failed);
+				return;
+			}
+			std::map<std::uint8_t, Bytes> images;
+			for (int object = 0; object < 4; ++object)
+			{
+				if (!(*data)[object])
+				{
+					self->setError(tr("Object %1: %2").arg(object + 1).arg(errorText((*data)[object].error())));
+					self->finish(false, failed);
+					return;
+				}
+				const QByteArray& bytes = *(*data)[object];
+				images[static_cast<std::uint8_t>(object + 1)] = Bytes(bytes.begin(), bytes.end());
+			}
+			self->importImages(context, std::move(images));
+		});
+}
+
+void CommissioningVM::importImages(std::shared_ptr<ReadContext> context, std::map<std::uint8_t, Bytes> images)
+{
+	// 3. Into the project, on the GUI thread: one undo step.
+	if (!project().devices().contains(context->device)
+		|| project().devices().at(context->device).appProgramRef != context->programId)
+	{
+		setError(tr("The device changed while its configuration was read."));
+		finish(false, tr("Reading the configuration of %1 failed.").arg(context->label));
+		return;
+	}
+	setProgress(tr("%1: applying the configuration…").arg(context->label), 4, 4);
+	auto warnings = appconfig::importSystemBImages(
+		project(), context->device, *context->app, images, project().settings().contentLanguage);
+	if (!warnings)
+	{
+		setError(tr("Cannot apply the configuration of %1: %2").arg(context->label, errorText(warnings.error())));
+		finish(false, tr("Reading the configuration of %1 failed.").arg(context->label));
+		return;
+	}
+	const QStringList notes = context->notes + *warnings;
+	for (const QString& note : notes)
+		appendLog(tr("%1: %2").arg(context->label, note));
+	if (!notes.isEmpty())
+		setError(notes.join(u'\n'));
+	finish(true,
+		notes.isEmpty() ? tr("Configuration of %1 read from the device.").arg(context->label)
+						: tr("Configuration of %1 read from the device, with %n warning(s).", nullptr, static_cast<int>(notes.size()))
+							  .arg(context->label));
+}
+
 void CommissioningVM::cancel()
 {
+	if (m_kind == u"readConfiguration"_s)
+	{
+		m_cancelRequested = true;
+		setProgress(tr("Cancelling…"), m_progressValue, m_progressTotal);
+		return;
+	}
 	if (m_kind == u"programAddress"_s)
 	{
 		m_bus->cancelProgramming();

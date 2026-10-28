@@ -2,7 +2,8 @@
 
 // Validation results (specs/03-domain-model.md §5). validate::run() is re-run 200 ms after the last ChangeSet
 // (debounced); the rows are updated with a keyed diff (no reset). Messages are the fixed English rule texts
-// (translated); the subjects are rendered with their current names and addresses.
+// (translated); the subjects are rendered with their current names and addresses. An extra source adds
+// diagnostics that need more than the project (the catalog: DeviceStatusService, CO-101).
 // Columns: Severity | Code | Message | Objects.
 
 #include "kestrel/validate/Validate.hpp"
@@ -11,6 +12,7 @@
 #include <QStringList>
 #include <QTimer>
 
+#include <functional>
 #include <vector>
 
 namespace kestrel::viewmodels
@@ -53,6 +55,10 @@ public:
 
 	/// Runs the validation now (cancels the pending debounce).
 	Q_INVOKABLE void refresh();
+	/// Restarts the debounce (an extra source changed).
+	void scheduleRefresh() { m_timer.start(); }
+	/// Diagnostics merged with validate::run() on every refresh.
+	void setExtraSource(std::function<std::vector<validate::Diagnostic>()> source);
 
 Q_SIGNALS:
 	void countsChanged();
@@ -63,6 +69,7 @@ private:
 	QString subjectsText(const validate::Diagnostic& diagnostic) const;
 
 	ProjectSession* m_session;
+	std::function<std::vector<validate::Diagnostic>()> m_extra;
 	std::vector<validate::Diagnostic> m_rows;
 	QStringList m_keys;
 	int m_counts[3] = {0, 0, 0};

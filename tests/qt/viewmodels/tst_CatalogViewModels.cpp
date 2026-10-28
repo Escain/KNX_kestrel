@@ -10,6 +10,9 @@
 #include "kestrel/viewmodels/CatalogService.hpp"
 #include "kestrel/viewmodels/DeviceEditorVM.hpp"
 #include "kestrel/viewmodels/DeviceParameterModel.hpp"
+#include "kestrel/viewmodels/DeviceStatusService.hpp"
+#include "kestrel/viewmodels/ProblemsModel.hpp"
+#include "kestrel/viewmodels/ProblemsPanelVM.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
 #include "kestrel/viewmodels/SelectionService.hpp"
 #include "kestrel/viewmodels/TopologyPanelVM.hpp"
@@ -22,8 +25,11 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
+#include <QThread>
 #include <QTimer>
 #include <QFile>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -404,6 +410,114 @@ private Q_SLOTS:
 		QVERIFY(model->row(kLedBrightness));
 		QCOMPARE(resets.count(), 0);
 		QCOMPARE(parameterResets.count(), 0);
+	}
+
+	void fr_dev_3__needsDownloadIsComputedOffTheGuiThread()
+	{
+		QVERIFY(importFixture());
+		const auto device = addCatalogDevice(kButtonProgram);
+		// The real planner, wrapped to see where it runs.
+		QSet<QThread*> threads;
+		QMutex mutex;
+		const viewmodels::DownloadPlanner real = viewmodels::catalogDownloadPlanner(m_ws->catalog());
+		m_ws->setDownloadPlanner(
+			[&](const model::Project& p, model::Id<model::Device> id)
+			{
+				{
+					const QMutexLocker lock(&mutex);
+					threads.insert(QThread::currentThread());
+				}
+				return real(p, id);
+			});
+		// As after a download: the device holds the plan of the current configuration.
+		const auto plan = real(project(), device);
+		QVERIFY2(plan.has_value(), plan ? "" : plan.error().message.c_str());
+		model::DeviceState state;
+		state.downloadedHash = viewmodels::planHash(*plan);
+		project().recordState(device, state);
+
+		viewmodels::DeviceStatusService* status = m_ws->deviceStatus();
+		using S = viewmodels::DeviceStatusService::DownloadState;
+		viewmodels::TopologyTreeModel* topology = m_ws->topology()->topologyModel();
+		QAbstractItemModelTester tester(topology, QAbstractItemModelTester::FailureReportingMode::QtTest);
+		const QModelIndex cell = topology->indexOf(model::EntityRef(device), viewmodels::TopologyTreeModel::DownloadColumn);
+		cell.data().toString(); // the first query starts the service
+		QVERIFY(status->isActive());
+		QVERIFY(status->waitForIdle());
+		QCOMPARE(status->downloadState(device), S::UpToDate);
+		QCOMPARE(cell.data().toString(), u"Loaded"_s);
+		auto editor = readyEditor(device);
+		QVERIFY(editor);
+		QVERIFY(editor->downloadState().contains(u"up to date"_s));
+		QVERIFY(!editor->needsDownload());
+
+		QSignalSpy changed(topology, &QAbstractItemModel::dataChanged);
+		QVERIFY(editor->setParameter(kFunctionA, u"1"_s));
+		QVERIFY(status->waitForIdle());
+		QCOMPARE(status->downloadState(device), S::NeedsDownload);
+		QCOMPARE(cell.data().toString(), u"Modified"_s);
+		QVERIFY(editor->needsDownload());
+		QVERIFY(changed.count() > 0); // the row was refreshed
+		QVERIFY(!threads.isEmpty());
+		QVERIFY(!threads.contains(QThread::currentThread())); // never on the GUI thread
+
+		QVERIFY(m_ws->session()->undo());
+		QVERIFY(status->waitForIdle());
+		QCOMPARE(status->downloadState(device), S::UpToDate);
+
+		// Rapid edits are debounced: one computation for a burst.
+		int calls = 0;
+		m_ws->setDownloadPlanner(
+			[&](const model::Project& p, model::Id<model::Device> id)
+			{
+				const QMutexLocker lock(&mutex);
+				++calls;
+				return real(p, id);
+			});
+		QVERIFY(status->waitForIdle());
+		calls = 0;
+		for (int i = 0; i < 5; ++i)
+			QVERIFY(editor->setParameter(u"M-FFFF_A-0001-10-0001_P-1_R-1"_s, QString::number(60 + i)));
+		QVERIFY(status->waitForIdle());
+		QCOMPARE(calls, 1);
+	}
+
+	void fr_dev_2__inactiveLinkedObjectsAreGreyedAndReported()
+	{
+		QVERIFY(importFixture());
+		const auto device = addCatalogDevice(kButtonProgram);
+		auto editor = readyEditor(device);
+		QVERIFY(editor);
+		QVERIFY(editor->linkObject(kButtonASwitch, u"0/0/10"_s));
+		viewmodels::ProblemsModel* problems = m_ws->problems()->problemsModel();
+		auto hasInactiveWarning = [&]
+		{
+			problems->refresh();
+			return std::any_of(problems->diagnostics().begin(), problems->diagnostics().end(),
+				[](const validate::Diagnostic& d) { return d.code == viewmodels::DeviceStatusService::kInactiveLinkedCode; });
+		};
+		QVERIFY(m_ws->deviceStatus()->waitForIdle());
+		QVERIFY(!hasInactiveWarning());
+
+		// Button A deactivated: the linked switch object stays, greyed, and is reported; its links are kept.
+		QVERIFY(editor->setParameter(kFunctionA, u"2"_s));
+		viewmodels::CatalogComObjectModel* objects = editor->catalogModel();
+		QCOMPARE(objects->rowCount(), 3);
+		QVERIFY(objects->isInactive(kButtonASwitch));
+		QVERIFY(objects->index(objects->rowOf(kButtonASwitch), 0).data(viewmodels::CatalogComObjectModel::InactiveRole).toBool());
+		QCOMPARE(editor->inactiveLinkedCount(), 1);
+		QVERIFY(m_ws->deviceStatus()->waitForIdle());
+		QVERIFY(hasInactiveWarning());
+		const auto object = editor->catalogModel()->modelObject(kButtonASwitch);
+		QVERIFY(object);
+		QCOMPARE(project().linksOfComObject(*object).size(), std::size_t{1});
+		QCOMPARE(m_ws->deviceStatus()->inactiveLinked(device), std::vector<model::Id<model::ComObject>>{*object});
+
+		// Unlinking it removes the row and the warning.
+		QVERIFY(editor->unlink(model::EntityRef(project().linksOfComObject(*object)[0]).toString()));
+		QCOMPARE(objects->rowCount(), 2);
+		QCOMPARE(editor->inactiveLinkedCount(), 0);
+		QVERIFY(!hasInactiveWarning());
 	}
 
 	/// Opt-in (ADR-009): real product files from $KESTREL_PRIVATE_CORPUS are indexed and opened without

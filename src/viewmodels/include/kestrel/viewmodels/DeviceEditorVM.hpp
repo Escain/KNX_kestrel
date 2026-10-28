@@ -26,6 +26,7 @@ class CatalogComObjectModel;
 class CatalogService;
 class ComObjectTableModel;
 class DeviceParameterModel;
+class DeviceStatusService;
 
 class DeviceEditorVM : public PanelVM
 {
@@ -55,6 +56,9 @@ class DeviceEditorVM : public PanelVM
 	Q_PROPERTY(QAbstractItemModel* parameters READ parameters CONSTANT)
 	Q_PROPERTY(int parameterCount READ parameterCount NOTIFY parametersChanged)
 	Q_PROPERTY(QString parameterWarnings READ parameterWarnings NOTIFY parametersChanged)
+	Q_PROPERTY(int inactiveLinkedCount READ inactiveLinkedCount NOTIFY parametersChanged)
+	Q_PROPERTY(QString downloadState READ downloadState NOTIFY downloadStateChanged)
+	Q_PROPERTY(bool needsDownload READ needsDownload NOTIFY downloadStateChanged)
 
 public:
 	/// MIME format of a dragged entity ref ("ga-…"): the Group Address dock is a drag source.
@@ -105,6 +109,14 @@ public:
 	int parameterCount() const;
 	/// Evaluation warnings (unsupported dynamic elements), one per line.
 	QString parameterWarnings() const { return m_parameterWarnings; }
+	/// Linked com objects that the parameters deactivated (shown greyed; their links are not downloaded).
+	int inactiveLinkedCount() const { return m_inactiveLinkedCount; }
+
+	/// Source of the "needs download" state (optional).
+	void setDeviceStatus(DeviceStatusService* status);
+	/// DeviceStatusService::describe(); empty without a status service or for manual devices.
+	QString downloadState() const;
+	bool needsDownload() const;
 
 	/// Adds a group object with nextNumber(). `flags`: letters of "CRWTUI"; `dpt` may be empty.
 	Q_INVOKABLE QString addComObject(const QString& name, const QString& function, int sizeInBit,
@@ -140,6 +152,7 @@ Q_SIGNALS:
 	void catalogChanged();
 	void groupAddressesChanged();
 	void parametersChanged();
+	void downloadStateChanged();
 	/// The device was deleted: the editor should close.
 	void deviceRemoved();
 
@@ -171,6 +184,8 @@ private:
 	QString m_currentObject;
 	DeviceParameterModel* m_parameters;
 	QString m_parameterWarnings;
+	int m_inactiveLinkedCount = 0;
+	DeviceStatusService* m_status = nullptr;
 };
 
 } // namespace kestrel::viewmodels

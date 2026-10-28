@@ -53,6 +53,14 @@ void ShadowTreeModel::rebuild()
 	endResetModel();
 }
 
+void ShadowTreeModel::refreshEntity(model::EntityRef ref)
+{
+	if (const Node* node = find(ref); node && node != m_root.get())
+	{
+		emitRowChanged(node);
+	}
+}
+
 // --- QAbstractItemModel ------------------------------------------------------------------------------------
 
 ShadowTreeModel::Node* ShadowTreeModel::nodeOf(const QModelIndex& index) const

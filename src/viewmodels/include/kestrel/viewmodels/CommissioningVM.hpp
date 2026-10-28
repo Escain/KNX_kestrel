@@ -9,6 +9,9 @@
 // - Download (FR-COM-2): the injected DownloadPlanner builds a download::Plan from a snapshot copy of the project
 //   on a worker thread, then BusSession::download() runs it with step progress. Success records
 //   downloadedHash = planHash(plan). Without a planner the download reports kNoPlanner.
+// - Read configuration (System B): reads the segment references, sizes and contents of interface objects 1..4
+//   and PID_PROGRAM_VERSION, then appconfig::importSystemBImages() replaces the device's parameters, com objects
+//   and links (one undo step). Cancel stops at the next bus answer (a running management request completes).
 // - Devices in programming mode: lists the individual addresses that answer A_IndividualAddress_Read.
 //
 // Commissioning facts are written with Project::recordState: the project becomes dirty, but nothing is undoable.
@@ -22,6 +25,7 @@
 #include <QStringList>
 #include <QThreadPool>
 
+#include <map>
 #include <memory>
 #include <optional>
 
@@ -32,6 +36,9 @@ class BusSession;
 
 namespace kestrel::viewmodels
 {
+
+class CatalogService;
+class DeviceStatusService;
 
 class CommissioningVM : public PanelVM
 {
@@ -64,6 +71,10 @@ public:
 
 	/// Injects the plan generator (kestrel::appconfig). An empty function removes it.
 	void setDownloadPlanner(DownloadPlanner planner);
+	/// Product databases for "read configuration" (and the device status text).
+	void setCatalog(CatalogService* catalog) { m_catalog = catalog; }
+	/// Optional: "needs download" in deviceStatus().
+	void setDeviceStatus(DeviceStatusService* status);
 	bool isPlannerAvailable() const { return static_cast<bool>(m_planner); }
 
 	/// The device the actions apply to: the selected device, or the device of a selected group object.
@@ -74,7 +85,7 @@ public:
 	QString deviceStatus() const;
 	bool isConnected() const;
 	bool isOperationActive() const { return !m_kind.isEmpty(); }
-	/// "", "programAddress", "readInfo", "download", "programmingMode"
+	/// "", "programAddress", "readInfo", "download", "readConfiguration", "programmingMode"
 	QString operationKind() const { return m_kind; }
 	QString operation() const { return m_operation; }
 	bool isCancellable() const;
@@ -96,9 +107,11 @@ public:
 	Q_INVOKABLE bool readDeviceInfo(const QString& deviceRef = {});
 	/// FR-COM-2. `deviceRef` empty = target device.
 	Q_INVOKABLE bool download(const QString& deviceRef = {});
+	/// Reads the configuration of a System B catalog device into the project. `deviceRef` empty = target device.
+	Q_INVOKABLE bool readConfiguration(const QString& deviceRef = {});
 	/// Lists the devices in programming mode.
 	Q_INVOKABLE bool readProgrammingMode();
-	/// Cancels IA programming or a download (also while the plan is being prepared).
+	/// Cancels IA programming, a download (also while the plan is being prepared) or a configuration read.
 	Q_INVOKABLE void cancel();
 	Q_INVOKABLE void clearLog();
 
@@ -120,8 +133,16 @@ private:
 	void appendLog(const QString& line);
 	void runDownload(model::Id<model::Device> device, knx::IndividualAddress address, QString label,
 		Result<download::Plan> plan);
+	struct ReadContext;
+	void readProperties(std::shared_ptr<ReadContext> context);
+	void readSegments(std::shared_ptr<ReadContext> context);
+	void importImages(std::shared_ptr<ReadContext> context, std::map<std::uint8_t, Bytes> images);
+	/// True (and finished as cancelled) if the user cancelled the running read.
+	bool stopIfCancelled(const QString& label);
 
 	app::BusSession* m_bus;
+	CatalogService* m_catalog = nullptr;
+	DeviceStatusService* m_status = nullptr;
 	DownloadPlanner m_planner;
 	QThreadPool m_pool; ///< runs the planner
 	QString m_kind;

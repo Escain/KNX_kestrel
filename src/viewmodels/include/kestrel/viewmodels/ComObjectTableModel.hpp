@@ -39,6 +39,8 @@ protected:
 	bool sortedByContent() const override { return true; }
 	void collectRelated(const model::ChangeSet& changeSet, std::set<model::EntityRef>& refresh, bool& all) const override;
 	bool isEditable(model::EntityRef ref, int column) const override;
+	/// "inactive" (always false: manual objects are always active), shared with CatalogComObjectModel.
+	QHash<int, QByteArray> extraRoleNames() const override { return {{ExtraRole, "inactive"}}; }
 
 private:
 	model::Id<model::Device> m_device;

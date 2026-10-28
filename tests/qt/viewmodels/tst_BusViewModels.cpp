@@ -13,6 +13,9 @@
 #include "kestrel/viewmodels/CatalogPanelVM.hpp"
 #include "kestrel/viewmodels/CatalogService.hpp"
 #include "kestrel/viewmodels/CommissioningVM.hpp"
+#include "kestrel/viewmodels/CatalogComObjectModel.hpp"
+#include "kestrel/viewmodels/DeviceEditorVM.hpp"
+#include "kestrel/viewmodels/DeviceStatusService.hpp"
 #include "kestrel/viewmodels/GroupMonitorVM.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
 #include "kestrel/viewmodels/SelectionService.hpp"
@@ -321,7 +324,8 @@ private Q_SLOTS:
 		QVERIFY(!m_ws->session()->canUndo());
 		QVERIFY(m_ws->session()->isDirty());
 		QCOMPARE(m_sim->device("systemb")->property(4, download::kPidProgramVersion), std::optional(hex({0xff, 0xff, 0x00, 0x01, 0x10})));
-		QVERIFY(bus->deviceStatus().contains(u"Application downloaded"_s));
+		// The device status service recomputes the plan off the GUI thread: same plan, so up to date.
+		QVERIFY(waitFor([bus] { return bus->deviceStatus().contains(u"up to date"_s); }, 10000));
 
 		// A plan the device refuses fails cleanly; the hash is not touched.
 		m_ws->setDownloadPlanner([](const model::Project&, model::Id<model::Device>) -> Result<download::Plan>
@@ -352,6 +356,86 @@ private Q_SLOTS:
 		QVERIFY2(bus->lastSucceeded(), qPrintable(bus->lastError() + u" / "_s + bus->lastResult()));
 		QVERIFY(!project().deviceState(m_systemB).downloadedHash.isEmpty());
 		QCOMPARE(*m_sim->device("systemb")->loadState(4), std::uint8_t{1}); // loaded
+	}
+
+	void fr_com_2__readConfigurationTakesOverADownloadedDevice()
+	{
+		// 1. Configure the button (two links, one parameter) and download it to the simulated System B device.
+		QVERIFY(m_ws->catalogPanel()->importFiles({QStringLiteral(KESTREL_TEST_DATA_DIR "/catalog/M-FFFF.knxprod")}));
+		QVERIFY(m_ws->catalog()->waitForIdle());
+		const QString ledMode = u"M-FFFF_A-0001-10-0001_UP-2_R-1"_s;
+		{
+			auto editor = m_ws->createDeviceEditor(m_systemB);
+			QVERIFY(waitFor([&] { return editor->catalogState() == u"ready"_s; }));
+			QVERIFY2(editor->linkObject(u"M-FFFF_A-0001-10-0001_O-1_R-1"_s, u"1/0/6"_s), qPrintable(editor->lastError()));
+			QVERIFY(editor->linkObject(u"M-FFFF_A-0001-10-0001_O-2_R-1"_s, u"2/0/6"_s));
+			QVERIFY(editor->setParameter(ledMode, u"1"_s));
+		}
+		QVERIFY(connect());
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
+		QVERIFY(bus->download(model::EntityRef(m_systemB).toString()));
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 60000));
+		QVERIFY2(bus->lastSucceeded(), qPrintable(bus->lastError()));
+
+		// 2. A new project that only knows the device's address and application.
+		model::Project fresh(model::IdGenerator::sequential());
+		const auto area = *model::addArea(fresh, 1, u"Area"_s);
+		const auto line = *model::addLine(fresh, area, 1, u"Line"_s);
+		const auto device = *model::addDevice(fresh, line, 21, u"Unknown button"_s, {}, u"M-FFFF_A-0001-10-0001"_s);
+		fresh.history().clear();
+		m_ws->session()->replaceProject(std::move(fresh));
+		m_ws->selection()->select(device, u"test"_s);
+		QVERIFY(m_ws->actions()->isEnabled(u"device.readConfiguration"_s));
+		QVERIFY(m_ws->actions()->trigger(u"device.readConfiguration"_s));
+		QCOMPARE(bus->operationKind(), u"readConfiguration"_s);
+		QVERIFY(bus->isCancellable());
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 60000));
+		QVERIFY2(bus->lastSucceeded(), qPrintable(bus->lastError() + u" / "_s + bus->lastResult()));
+
+		// 3. Parameters, com objects and links are back, in one undo step.
+		const model::Project& p = project();
+		QCOMPARE(p.devices().at(device).params.size(), std::size_t{1});
+		QCOMPARE(p.devices().at(device).params.begin()->second, u"1"_s);
+		std::map<unsigned, QList<std::uint16_t>> links;
+		for (const auto object : p.comObjectsOf(device))
+		{
+			QVERIFY(!p.comObjects().at(object).catalogRef.isEmpty());
+			for (const auto link : p.linksOfComObject(object))
+				links[p.comObjects().at(object).number].append(p.groupAddresses().at(p.links().at(link).groupAddress).raw);
+		}
+		QCOMPARE(links, (std::map<unsigned, QList<std::uint16_t>>{{1u, {0x0806}}, {2u, {0x1006}}}));
+		QVERIFY(m_ws->session()->canUndo());
+		QVERIFY(m_ws->session()->undo());
+		QVERIFY(project().comObjectsOf(device).empty());
+
+		// Cancel stops at the next answer and changes nothing.
+		QVERIFY(bus->readConfiguration());
+		bus->cancel();
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 30000));
+		QVERIFY(bus->lastResult().contains(u"cancelled"_s));
+		QVERIFY(project().comObjectsOf(device).empty());
+	}
+
+	void fr_dev_3__downloadMakesTheDeviceUpToDate()
+	{
+		QVERIFY(m_ws->catalogPanel()->importFiles({QStringLiteral(KESTREL_TEST_DATA_DIR "/catalog/M-FFFF.knxprod")}));
+		QVERIFY(m_ws->catalog()->waitForIdle());
+		viewmodels::DeviceStatusService* status = m_ws->deviceStatus();
+		using S = viewmodels::DeviceStatusService::DownloadState;
+		QCOMPARE(status->downloadState(m_systemB), S::NotDownloaded);
+		QCOMPARE(status->downloadState(m_ids.dimmer), S::None);
+		QVERIFY(connect());
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
+		QVERIFY(bus->download(model::EntityRef(m_systemB).toString()));
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 60000));
+		QVERIFY(bus->lastSucceeded());
+		QVERIFY(status->waitForIdle());
+		QCOMPARE(status->downloadState(m_systemB), S::UpToDate);
+		QVERIFY(model::setDeviceParam(project(), m_systemB, u"M-FFFF_A-0001-10-0001_UP-2_R-1"_s, u"0"_s).has_value());
+		QVERIFY(status->waitForIdle());
+		QCOMPARE(status->downloadState(m_systemB), S::NeedsDownload);
+		m_ws->selection()->select(m_systemB, u"test"_s);
+		QVERIFY(bus->deviceStatus().contains(u"download needed"_s));
 	}
 
 	void fr_com_1__devicesInProgrammingModeAreListed()

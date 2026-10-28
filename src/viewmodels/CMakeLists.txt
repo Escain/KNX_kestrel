@@ -14,6 +14,7 @@ set(_vm_headers
 	include/kestrel/viewmodels/ConfigurationHooks.hpp
 	include/kestrel/viewmodels/DeviceEditorVM.hpp
 	include/kestrel/viewmodels/DeviceParameterModel.hpp
+	include/kestrel/viewmodels/DeviceStatusService.hpp
 	include/kestrel/viewmodels/Format.hpp
 	include/kestrel/viewmodels/GroupAddressPanelVM.hpp
 	include/kestrel/viewmodels/GroupAddressTreeModel.hpp
@@ -45,6 +46,7 @@ set(_vm_sources
 	src/ConfigurationHooks.cpp
 	src/DeviceEditorVM.cpp
 	src/DeviceParameterModel.cpp
+	src/DeviceStatusService.cpp
 	src/Format.cpp
 	src/GroupAddressPanelVM.cpp
 	src/GroupAddressTreeModel.cpp
