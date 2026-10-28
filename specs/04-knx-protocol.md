@@ -90,3 +90,22 @@ collects responses for 3 s. Bus objects live on a bus thread owned by `app::BusS
 ## 7. Later milestones
 Full download (data-driven `LdCtrl*` interpretation, ADR-008), System B, couplers and filter tables, routing pacing,
 USB HID, KNX Data/IP Secure (OpenSSL), and a JavaScript host for calculated parameters.
+
+## Field notes (real hardware)
+
+First session on 2026-10-28, with a Gira KNX/IP interface (M-0008, mask 0012) and one blind actuator
+(M-0162, mask 07B0) on TP. The PC reached the interface over a direct link-local (169.254/16) Ethernet
+link. Search, tunnelling, device info, `device progmode` and `program-ia` all worked.
+
+- **Duplicate individual address.** The interface and the actuator were both 15.15.1. In connection-
+  oriented mode, both devices answered every request with a T_ACK and a response, each with its own
+  sequence numbers, and one of them ended with a T_Disconnect. `ManagementSession` disconnects on the
+  second T_ACK, as Style 1 requires. Its error now says that more than one device may use the address.
+  Diagnosis: `device progmode` lists the same address twice, and the device-info serial numbers differ.
+- **Negative L_Data.con for an absent address.** A frame to a free individual address came back as
+  L_Data.con with the error bit set (ctrl1 `0x91`): nobody gave a layer-2 acknowledgement. The IA address
+  check could use this to finish early instead of waiting for its 3 s timeout (not done yet).
+- **Ordering.** When the interface's own address is the target, the interface answers locally: its T_ACK
+  and the response arrive before the L_Data.con of our request. The session already handles a response that
+  overtakes the T_ACK.
+- `kestrel.bus.frames=true` (`QT_LOGGING_RULES`) logs every KNXnet/IP datagram as hex.

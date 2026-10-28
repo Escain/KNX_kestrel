@@ -87,6 +87,7 @@ public:
 	using ProgressCallback = std::function<void(knx::IaProgrammerState)>;
 	using DeviceInfoCallback = std::function<void(Result<DeviceInfo>)>;
 	using DiscoveryCallback = std::function<void(Result<QList<bus::DiscoveredInterface>>)>;
+	using AddressListCallback = std::function<void(Result<QList<knx::IndividualAddress>>)>;
 
 	struct ProgramOptions
 	{
@@ -140,6 +141,10 @@ public:
 	/// FR-COM-4: device descriptor 0, serial number (PID 11) and manufacturer (PID 12) over a
 	/// transport connection.
 	void readDeviceInfo(knx::IndividualAddress device, DeviceInfoCallback done);
+	/// Read-only: broadcasts A_IndividualAddress_Read and collects every answer for `window`, i.e. the
+	/// addresses of the devices in programming mode, in arrival order. One address listed twice means two
+	/// devices share it.
+	void readProgrammingMode(AddressListCallback done, std::chrono::milliseconds window = std::chrono::milliseconds(3000));
 
 	// --- Discovery (FR-BUS-1) ---------------------------------------------------------------------------------
 	/// Runs a bus::Discovery on the bus thread. Independent of the tunnel connection.

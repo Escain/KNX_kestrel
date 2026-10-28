@@ -18,3 +18,5 @@
 - `tools/trace.py` traceability matrix; CI workflow; pre-commit hook for forbidden files; clang-format not installed on the dev box.
 - Refs cross into QML as text ids; revisit a `Q_GADGET` `EntityRef` if it becomes a bottleneck.
 - `tst_BusSession` takes about 35 s because of real protocol timeouts. Consider injecting shorter timeouts.
+- IA address check: treat a negative L_Data.con as "address free" and finish early (see 04 field notes).
+- GUI: a "devices in programming mode" action backed by `BusSession::readProgrammingMode`.

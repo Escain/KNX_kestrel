@@ -76,6 +76,11 @@ void BusSession::readDeviceInfo(knx::IndividualAddress device, DeviceInfoCallbac
 	post([device, done = std::move(done)](detail::BusWorker& w) mutable { w.readDeviceInfo(device, std::move(done)); });
 }
 
+void BusSession::readProgrammingMode(AddressListCallback done, std::chrono::milliseconds window)
+{
+	post([window, done = std::move(done)](detail::BusWorker& w) mutable { w.readProgrammingMode(window, std::move(done)); });
+}
+
 void BusSession::discover(DiscoveryOptions options, DiscoveryCallback done)
 {
 	post([options = std::move(options), done = std::move(done)](detail::BusWorker& w) mutable

@@ -170,6 +170,7 @@ private:
 
 	bool m_connected = false;
 	std::uint8_t m_sendSeq = 0;
+	bool m_anyAcked = false; ///< m_sendSeq - 1 was acknowledged on this connection
 	std::uint8_t m_recvSeq = 0;
 	Phase m_phase = Phase::Idle;
 	Apdu m_request;

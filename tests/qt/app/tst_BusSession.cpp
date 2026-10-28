@@ -239,6 +239,33 @@ private Q_SLOTS:
 		QCOMPARE(programmed.value->has_value(), false);
 	}
 
+	void fr_com_1__readsProgrammingMode()
+	{
+		Outcome<Result<QList<knx::IndividualAddress>>> notConnected;
+		m_session->readProgrammingMode(notConnected.callback(), 300ms);
+		QVERIFY(notConnected.wait());
+		QVERIFY(!notConnected.value->has_value());
+
+		QVERIFY(connectSession());
+		Outcome<Result<QList<knx::IndividualAddress>>> none;
+		m_session->readProgrammingMode(none.callback(), 500ms);
+		QVERIFY(none.wait());
+		QVERIFY(none.value->has_value());
+		QVERIFY((*none.value)->isEmpty());
+
+		// Two devices sharing an address answer twice: the list keeps both answers.
+		m_sim->device("fresh")->pressProgButton();
+		m_sim->device("twin")->pressProgButton();
+		Outcome<Result<QList<knx::IndividualAddress>>> both;
+		m_session->readProgrammingMode(both.callback(), 500ms);
+		QVERIFY(both.wait());
+		QVERIFY(both.value->has_value());
+		QCOMPARE(**both.value, (QList<knx::IndividualAddress>{knx::IndividualAddress(0xFFFF), knx::IndividualAddress(0xFFFF)}));
+		// Read-only: nothing changed on the devices.
+		QVERIFY(m_sim->device("fresh")->progMode());
+		QCOMPARE(m_sim->device("fresh")->address(), knx::IndividualAddress(0xFFFF));
+	}
+
 	void fr_com_1__cancelProgramming()
 	{
 		QVERIFY(connectSession());

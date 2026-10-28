@@ -117,6 +117,7 @@ void ManagementSession::startNext(TimePoint now)
 		m_connected = true;
 		m_sendSeq = 0;
 		m_recvSeq = 0;
+		m_anyAcked = false;
 		transmit(Tpdu::connect(), now);
 	}
 	m_request = buildRequest(operation);
@@ -158,6 +159,7 @@ void ManagementSession::sendRequest(TimePoint now)
 void ManagementSession::onAcked(TimePoint now)
 {
 	m_sendSeq = nextSeq(m_sendSeq);
+	m_anyAcked = true;
 	// A response that overtook the T_ACK (possibly across repetitions) belongs to this exchange.
 	auto early = std::move(m_earlyResponse);
 	m_earlyResponse.reset();
@@ -378,7 +380,14 @@ void ManagementSession::onFrame(const cemi::LData& frame, TimePoint now)
 		{
 			// Style 1 transport: an acknowledgement we are not waiting for means the two ends are out of
 			// step; continuing would risk executing or reporting the wrong request.
-			failAll(Error{ErrorCode::ProtocolError, "unexpected T_ACK/T_NAK sequence number from " + m_target.toString()});
+			// A second T_ACK for the request just acknowledged is what two devices sharing the target address
+			// produce (each acknowledges; seen on a real installation), so say so instead of a bare mismatch.
+			const bool repeated = tpdu->type == TpduType::Ack && m_anyAcked
+				&& tpdu->seq == static_cast<std::uint8_t>((m_sendSeq - 1) & kSeqMask);
+			failAll(Error{ErrorCode::ProtocolError,
+				repeated ? "second T_ACK from " + m_target.toString()
+						+ " for the same request: more than one device may be using this individual address"
+						 : "unexpected T_ACK/T_NAK sequence number from " + m_target.toString()});
 			disconnect(ManagementDisconnectReason::ProtocolError, true);
 			return;
 		}

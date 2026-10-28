@@ -45,6 +45,7 @@ public:
 		BusSession::ProgramCallback done, BusSession::ProgressCallback progress);
 	void cancelProgramming();
 	void readDeviceInfo(knx::IndividualAddress device, BusSession::DeviceInfoCallback done);
+	void readProgrammingMode(std::chrono::milliseconds window, BusSession::AddressListCallback done);
 	void discover(const BusSession::DiscoveryOptions& options, BusSession::DiscoveryCallback done);
 
 private:
@@ -59,6 +60,12 @@ private:
 		dpt::DptId dpt;
 		knx::TimePoint deadline;
 		BusSession::GroupReadCallback done;
+	};
+	struct ProgModeScan
+	{
+		knx::TimePoint deadline;
+		QList<knx::IndividualAddress> found;
+		BusSession::AddressListCallback done;
 	};
 	struct InfoOp
 	{
@@ -111,6 +118,7 @@ private:
 	std::chrono::milliseconds m_programTimeout{0};
 
 	std::vector<std::unique_ptr<InfoOp>> m_infos;
+	std::vector<ProgModeScan> m_scans;
 };
 
 } // namespace kestrel::app::detail

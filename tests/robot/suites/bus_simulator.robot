@@ -78,6 +78,19 @@ Program Individual Address Times Out Without Device In Programming Mode
     ...    expected_rc=4    timeout=30
     Should Be Equal    ${result}[error][code]    Timeout
 
+Programming Mode Lists Devices Without Changing Them
+    [Documentation]    device progmode only asks (A_IndividualAddress_Read); the device keeps its address.
+    [Tags]    FR-COM-1
+    ${result}=    Run Cli Json    device    progmode    --interface    ${IF}    --timeout    0.5
+    Length Should Be    ${result}[devices]    0
+    Press Programming Button    spare
+    ${result}=    Run Cli Json    device    progmode    --interface    ${IF}    --timeout    0.5
+    Should Be Equal    ${result}[devices]    ${{["15.15.254"]}}
+    ${device}=    Get Simulated Device    spare
+    Should Be True    ${device}[progMode]
+    Should Be Equal    ${device}[address]    15.15.254
+    Press Programming Button    spare
+
 Device Info Reads Descriptor Serial And Manufacturer
     [Tags]    FR-COM-4
     ${info}=    Run Cli Json    device    info    1.1.1    --interface    ${IF}

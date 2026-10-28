@@ -158,6 +158,37 @@ UNIT_TEST(FR_COM_4__managementWrongAckSequenceDisconnects)
 		(std::vector<Session::Disconnected>{{ManagementDisconnectReason::ProtocolError}}));
 }
 
+UNIT_TEST(FR_COM_4__managementRepeatedAckHintsAtDuplicateAddress)
+{
+	// Captured on a real installation where an IP interface and a bus device both had the target address:
+	// T_ACK, response, our T_ACK, then a second T_ACK 0 (from the other device). Style 1 disconnects.
+	auto session = newSession();
+	const auto first = session.deviceDescriptorRead(kT0);
+	(void)session.takeActions();
+	session.onFrame(fromDevice(Tpdu::ack(0)), kT0);
+	session.onFrame(fromDevice(Tpdu::dataConnected(0, deviceDescriptorResponse(0, hex("00 12")))), kT0 + 10ms);
+	ASSERT_EQ(only<Session::Completed>(session.takeActions()), (std::vector<Session::Completed>{{first, hex("00 12")}}));
+	const auto second = session.memoryRead(0x4000, 2, kT0 + 20ms);
+	(void)session.takeActions();
+	session.onFrame(fromDevice(Tpdu::ack(0)), kT0 + 30ms);
+	auto actions = session.takeActions();
+	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::disconnect()}));
+	auto failed = only<Session::Failed>(actions);
+	ASSERT_EQ(failed.size(), std::size_t{1});
+	ASSERT_EQ(failed[0].id, second);
+	ASSERT_EQ(failed[0].error.code, ErrorCode::ProtocolError);
+	ASSERT(failed[0].error.message.find("more than one device") != std::string::npos);
+
+	// Before any T_ACK on a connection nothing can be repeated: the wrap-around number 15 is a plain mismatch.
+	auto fresh = newSession();
+	(void)fresh.deviceDescriptorRead(kT0);
+	(void)fresh.takeActions();
+	fresh.onFrame(fromDevice(Tpdu::ack(15)), kT0);
+	failed = only<Session::Failed>(fresh.takeActions());
+	ASSERT_EQ(failed.size(), std::size_t{1});
+	ASSERT(failed[0].error.message.find("unexpected T_ACK") != std::string::npos);
+}
+
 UNIT_TEST(FR_COM_4__managementAckTimeoutRepeatsThreeTimes)
 {
 	auto session = newSession();

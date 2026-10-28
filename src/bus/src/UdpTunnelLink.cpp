@@ -133,6 +133,7 @@ void UdpTunnelLink::onReadyRead()
 			continue;
 		}
 		const QByteArray data = datagram.data();
+		qCDebug(lcBusFrames).noquote() << "<-" << data.toHex(' ');
 		const auto* begin = reinterpret_cast<const std::uint8_t*>(data.constData());
 		m_client.onDatagram(ByteView(begin, static_cast<std::size_t>(data.size())), knx::Clock::now());
 		processActions();
@@ -161,6 +162,7 @@ void UdpTunnelLink::onSocketError(QAbstractSocket::SocketError error)
 void UdpTunnelLink::writeDatagram(const Bytes& bytes)
 {
 	const QByteArray data(reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size()));
+	qCDebug(lcBusFrames).noquote() << "->" << data.toHex(' ');
 	if (m_socket->writeDatagram(data, m_remoteHost, m_remotePort) < 0)
 	{
 		qCWarning(lcBus) << "writeDatagram failed:" << m_socket->errorString();

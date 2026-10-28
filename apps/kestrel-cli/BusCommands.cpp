@@ -536,6 +536,38 @@ int deviceInfo(Invocation& inv)
 		});
 }
 
+int deviceProgMode(Invocation& inv)
+{
+	const auto window = parseSeconds(inv.value(u"timeout"_s));
+	if (!window)
+	{
+		return inv.out.failure(kExitUsage, u"invalid --timeout"_s, u"Usage"_s);
+	}
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.readProgrammingMode(
+				[&, finish](Result<QList<knx::IndividualAddress>> result)
+				{
+					if (!result)
+					{
+						finish(inv.out.failure(busExitCode(result.error()), result.error()));
+						return;
+					}
+					QJsonArray devices;
+					QStringList lines;
+					for (const knx::IndividualAddress& address : std::as_const(*result))
+					{
+						devices.append(qs(address.toString()));
+						lines.append(qs(address.toString()));
+					}
+					finish(inv.out.success({{u"devices"_s, devices}},
+						lines.isEmpty() ? u"no device in programming mode"_s : lines.join(u'\n')));
+				},
+				*window);
+		});
+}
+
 } // namespace
 
 std::vector<Command> busCommands()
@@ -551,6 +583,7 @@ std::vector<Command> busCommands()
 	const QCommandLineOption monitorDpt(u"dpt"_s, u"Decode a group address with a DPT: ga=dpt (repeatable)."_s, u"ga=dpt"_s);
 	const QCommandLineOption programTimeout(u"timeout"_s,
 		u"Seconds to wait for a device in programming mode (default 60)."_s, u"s"_s, u"60"_s);
+	const QCommandLineOption progModeTimeout(u"timeout"_s, u"Seconds to collect answers (default 3)."_s, u"s"_s, u"3"_s);
 	const QCommandLineOption overwrite(u"overwrite"_s, u"Program even if another device already uses the address."_s);
 
 	return {
@@ -567,6 +600,9 @@ std::vector<Command> busCommands()
 			{kInterfaceOption, programTimeout, overwrite}, programIa},
 		{{u"device"_s, u"info"_s}, {u"ia"_s}, u"Read mask version, serial number and manufacturer (FR-COM-4)."_s,
 			{kInterfaceOption}, deviceInfo},
+		{{u"device"_s, u"progmode"_s}, {},
+			u"List the addresses of the devices in programming mode (read-only; FR-COM-1)."_s,
+			{kInterfaceOption, progModeTimeout}, deviceProgMode},
 	};
 }
 

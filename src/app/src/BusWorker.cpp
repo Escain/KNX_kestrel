@@ -160,6 +160,10 @@ void BusWorker::failAll(const Error& error)
 			deliver(op->done, Result<DeviceInfo>(Unexpected{error}));
 		}
 	}
+	for (auto& scan : std::exchange(m_scans, {}))
+	{
+		deliver(scan.done, Result<QList<knx::IndividualAddress>>(Unexpected{error}));
+	}
 }
 
 // --- Frames ------------------------------------------------------------------------------------------------
@@ -227,6 +231,18 @@ void BusWorker::onLinkFrame(const knx::cemi::LData& frame)
 						QString::fromStdString(dpt::format(op.dpt, *value))};
 					deliver(op.done, Result<GroupReadResult>(std::move(result)));
 				}
+			}
+		}
+	}
+
+	if (!m_scans.empty() && frame.groupDestination && frame.destination == 0)
+	{
+		auto tpdu = knx::decodeTpdu(frame);
+		if (tpdu && tpdu->type == knx::TpduType::DataBroadcast && tpdu->apdu.apci == knx::Apci::IndividualAddressResponse)
+		{
+			for (auto& scan : m_scans)
+			{
+				scan.found.push_back(frame.sourceAddress());
 			}
 		}
 	}
@@ -357,6 +373,23 @@ void BusWorker::groupRead(knx::GroupAddress address, dpt::DptId dpt, std::chrono
 		return;
 	}
 	m_reads.push_back({address, dpt, knx::Clock::now() + timeout, std::move(done)});
+	ensureTimer();
+}
+
+void BusWorker::readProgrammingMode(std::chrono::milliseconds window, BusSession::AddressListCallback done)
+{
+	if (m_link->state() != knx::LinkState::Connected)
+	{
+		deliver(done, Result<QList<knx::IndividualAddress>>(notConnected()));
+		return;
+	}
+	const Status sent = sendFrame(knx::makeBroadcastFrame(knx::individualAddressRead()));
+	if (!sent)
+	{
+		deliver(done, Result<QList<knx::IndividualAddress>>(Unexpected{sent.error()}));
+		return;
+	}
+	m_scans.push_back({knx::Clock::now() + window, {}, std::move(done)});
 	ensureTimer();
 }
 
@@ -574,6 +607,18 @@ void BusWorker::onTick()
 			deliver(it->done, Result<GroupReadResult>(makeError(ErrorCode::Timeout,
 								  "no response to the group read of " + it->address.toString())));
 			it = m_reads.erase(it);
+		}
+		else
+		{
+			++it;
+		}
+	}
+	for (auto it = m_scans.begin(); it != m_scans.end();)
+	{
+		if (now >= it->deadline)
+		{
+			deliver(it->done, Result<QList<knx::IndividualAddress>>(std::move(it->found)));
+			it = m_scans.erase(it);
 		}
 		else
 		{
