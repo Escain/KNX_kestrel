@@ -5,3 +5,4 @@ endif()
 
 kestrel_add_robot_suite(bus_simulator)
 kestrel_add_robot_suite(project_cli)
+kestrel_add_robot_suite(configuration)

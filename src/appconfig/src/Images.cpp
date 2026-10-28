@@ -306,6 +306,11 @@ Result<SystemBImages> buildSystemB(const catalog::ApplicationProgram& app, const
 	std::set<std::uint16_t> addressSet;
 	for (const auto& [object, addresses] : links)
 	{
+		if (object == 0)
+		{
+			result.warnings.append(u"group object 0 cannot be loaded on System B (objects are numbered from 1)"_s);
+			continue;
+		}
 		if (!activeNumbers.contains(object))
 		{
 			result.warnings.append(u"group object %1 is not active with these parameters; its links are not loaded"_s
@@ -329,7 +334,9 @@ Result<SystemBImages> buildSystemB(const catalog::ApplicationProgram& app, const
 	KESTREL_TRY(auto segments, buildParameterSegments(app, values, evaluation, result.warnings));
 	for (const catalog::RelativeSegment& segment : app.relativeSegments)
 	{
-		if (segment.loadStateMachine == 0 || segment.loadStateMachine > 0xFF)
+		// LSM 1..3 are the tables built above; an application may still declare relative segments for them
+		// (their Size only matters for the allocation, see download::resolve).
+		if (segment.loadStateMachine <= 3 || segment.loadStateMachine > 0xFF)
 		{
 			continue;
 		}

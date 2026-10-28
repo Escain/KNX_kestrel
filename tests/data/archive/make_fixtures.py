@@ -162,11 +162,8 @@ def archive_fixtures():
 def knxprod_fixture():
     source = DATA / "catalog" / "M-FFFF"
     members = [(f"M-FFFF/{p.name}", p.read_bytes(), zipfile.ZIP_DEFLATED) for p in sorted(source.glob("*.xml"))]
-    # Stand-in for the master data shipped inside real product files; synthetic, two elements only.
-    master = (b'<?xml version="1.0" encoding="utf-8"?>\n'
-              b'<KNX xmlns="http://knx.org/xml/project/20"><MasterData Version="0" Signature="">'
-              b'<Manufacturers><Manufacturer Id="M-FFFF" Name="Kestrel Test Manufacturer" KnxManufacturerId="65535"/>'
-              b'</Manufacturers></MasterData></KNX>\n')
+    # Stand-in for the master data shipped inside real product files (synthetic: one mask, one procedure).
+    master = (DATA / "catalog" / "knx_master.xml").read_bytes()
     members.append(("knx_master.xml", master, zipfile.ZIP_DEFLATED))
     write(DATA / "catalog" / "M-FFFF.knxprod", zipfile_archive(members))
 

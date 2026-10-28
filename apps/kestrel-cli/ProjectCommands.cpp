@@ -3,6 +3,8 @@
 
 #include "Cli.hpp"
 
+#include "kestrel/appconfig/DeviceImages.hpp"
+#include "kestrel/catalog/Knxprod.hpp"
 #include "kestrel/dpt/Dpt.hpp"
 #include "kestrel/model/Entities.hpp"
 #include "kestrel/model/Operations.hpp"
@@ -453,7 +455,7 @@ int topologyAddDevice(Invocation& inv)
 			const Status status = p.edit(u"Add device"_s,
 				[&](model::Tx&) -> Status
 				{
-					auto id = model::addDevice(p, *line, number, name);
+					auto id = model::addDevice(p, *line, number, name, inv.value(u"product"_s), inv.value(u"application"_s));
 					if (!id)
 					{
 						return Unexpected{id.error()};
@@ -548,6 +550,163 @@ int linkAdd(Invocation& inv)
 		u"Link"_s);
 }
 
+// --- device configuration ----------------------------------------------------------------------------------
+
+int deviceParam(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto device = parseId<model::Device>(inv, inv.args[1], exitCode);
+	if (!device)
+	{
+		return exitCode;
+	}
+	auto project = load(inv, inv.args[0], exitCode);
+	if (!project)
+	{
+		return exitCode;
+	}
+	const bool reset = inv.isSet(u"reset"_s);
+	const Status status = model::setDeviceParam(*project, *device, inv.args[2],
+		reset ? std::nullopt : std::optional<QString>(inv.args[3]));
+	if (!status)
+	{
+		return inv.out.failure(modelExitCode(status.error()), status.error());
+	}
+	if (const int saved = save(inv, *project, inv.args[0]); saved != kExitOk)
+	{
+		return saved;
+	}
+	return inv.out.success({{u"parameter"_s, inv.args[2]}, {u"reset"_s, reset}},
+		reset ? u"%1 reset to its default"_s.arg(inv.args[2]) : u"%1 = %2"_s.arg(inv.args[2], inv.args[3]));
+}
+
+/// Links a catalog com object (ComObjectRef id, or an object number resolved with the device's current
+/// parameters) to a group address; creates the com object and the group address when missing.
+int deviceLink(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto deviceId = parseId<model::Device>(inv, inv.args[1], exitCode);
+	if (!deviceId)
+	{
+		return exitCode;
+	}
+	const auto address = knx::GroupAddress::parse(inv.args[3].toStdString());
+	if (!address)
+	{
+		return inv.out.failure(kExitUsage, u"invalid group address %1"_s.arg(inv.args[3]), u"Usage"_s);
+	}
+	if (!inv.isSet(u"knxprod"_s))
+	{
+		return inv.out.failure(kExitUsage, u"--knxprod is required (the device's product file)"_s, u"Usage"_s);
+	}
+	auto project = load(inv, inv.args[0], exitCode);
+	if (!project)
+	{
+		return exitCode;
+	}
+	const model::Device* device = project->devices().find(*deviceId);
+	if (!device)
+	{
+		return inv.out.failure(kExitFindings, u"no device %1"_s.arg(inv.args[1]), u"NotFound"_s);
+	}
+	auto loaded = catalog::loadKnxprodFile(inv.value(u"knxprod"_s));
+	if (!loaded)
+	{
+		return inv.out.failure(kExitFindings, loaded.error());
+	}
+	const catalog::ApplicationProgram* app = loaded->database.findApplicationProgram(device->appProgramRef);
+	if (!app)
+	{
+		return inv.out.failure(kExitFindings,
+			u"the product file does not contain the device's application \"%1\""_s.arg(device->appProgramRef),
+			u"NotFound"_s);
+	}
+	auto configuration = appconfig::deviceConfiguration(*project, *deviceId, *app);
+	auto evaluation = configuration ? appconfig::evaluate(*app, configuration->values)
+									: Result<appconfig::Evaluation>(Unexpected{configuration.error()});
+	if (!evaluation)
+	{
+		return inv.out.failure(kExitFindings, evaluation.error());
+	}
+	const QString wanted = inv.args[2];
+	bool isNumber = false;
+	const uint number = wanted.toUInt(&isNumber);
+	const catalog::EffectiveComObject* definition = nullptr;
+	const auto effective = app->effectiveComObjects();
+	for (const catalog::EffectiveComObject& candidate : effective)
+	{
+		const bool matches = isNumber ? candidate.number == number : candidate.refId == wanted;
+		if (matches && evaluation->isComObjectRefActive(candidate.refId))
+		{
+			definition = &candidate;
+			break;
+		}
+	}
+	if (!definition)
+	{
+		return inv.out.failure(kExitFindings,
+			u"no active com object %1 with the device's current parameters"_s.arg(wanted), u"NotFound"_s);
+	}
+
+	std::optional<model::Id<model::Link>> created;
+	const Status status = project->edit(u"Link %1 to %2"_s.arg(definition->number).arg(inv.args[3]),
+		[&](model::Tx&) -> Status
+		{
+			std::optional<model::Id<model::ComObject>> objectId;
+			for (const model::ComObject& object : project->comObjects().rows())
+			{
+				if (object.device == *deviceId && object.number == definition->number)
+				{
+					objectId = object.id;
+				}
+			}
+			if (!objectId)
+			{
+				model::ComObject object;
+				object.number = definition->number;
+				object.name = definition->text.isEmpty() ? definition->name : definition->text;
+				object.function = definition->functionText;
+				object.sizeInBit = definition->sizeInBit == 0 ? 1 : definition->sizeInBit;
+				object.flags = model::ComObjectFlags{definition->flags.communication, definition->flags.read,
+					definition->flags.write, definition->flags.transmit, definition->flags.update,
+					definition->flags.readOnInit};
+				const QString dpt = definition->datapointType.section(u' ', 0, 0);
+				object.dpt = model::isValidDptRef(dpt) ? dpt : QString();
+				object.catalogRef = definition->refId;
+				KESTREL_TRY(const auto id, model::addComObject(*project, *deviceId, object));
+				objectId = id;
+			}
+			std::optional<model::Id<model::GroupAddress>> groupAddress;
+			for (const model::GroupAddress& candidate : project->groupAddresses().rows())
+			{
+				if (candidate.raw == address->raw())
+				{
+					groupAddress = candidate.id;
+				}
+			}
+			if (!groupAddress)
+			{
+				const QString name = inv.isSet(u"ga-name"_s) ? inv.value(u"ga-name"_s) : qs(address->toString());
+				KESTREL_TRY(const auto id, model::addGroupAddress(*project, *address, name));
+				groupAddress = id;
+			}
+			KESTREL_TRY(const auto link, model::link(*project, *objectId, *groupAddress));
+			created = link;
+			return ok();
+		});
+	if (!status)
+	{
+		return inv.out.failure(modelExitCode(status.error()), status.error());
+	}
+	if (const int saved = save(inv, *project, inv.args[0]); saved != kExitOk)
+	{
+		return saved;
+	}
+	return inv.out.success({{u"id"_s, created->toString()}, {u"object"_s, static_cast<int>(definition->number)},
+							   {u"comObjectRef"_s, definition->refId}},
+		u"linked object %1 (%2) to %3"_s.arg(definition->number).arg(definition->functionText, inv.args[3]));
+}
+
 // --- validate ----------------------------------------------------------------------------------------------
 
 int validateProject(Invocation& inv)
@@ -622,6 +781,11 @@ std::vector<Command> projectCommands()
 	const QCommandLineOption flags(u"flags"_s, u"Communication flags, letters of CRWTUI (default C)."_s, u"flags"_s);
 	const QCommandLineOption dptOption(u"dpt"_s, u"Datapoint type: 1.001, DPT-9 or DPST-9-1."_s, u"dpt"_s);
 	const QCommandLineOption function(u"function"_s, u"Function text of the object."_s, u"text"_s);
+	const QCommandLineOption product(u"product"_s, u"Catalog product id (from catalog inspect)."_s, u"id"_s);
+	const QCommandLineOption application(u"application"_s, u"Application program id (from catalog inspect)."_s, u"id"_s);
+	const QCommandLineOption reset(u"reset"_s, u"Reset the parameter to its default instead of setting a value."_s);
+	const QCommandLineOption knxprodOption(u"knxprod"_s, u"Product file (.knxprod) of the device."_s, u"file"_s);
+	const QCommandLineOption gaName(u"ga-name"_s, u"Name of the group address when it is created."_s, u"name"_s);
 
 	return {
 		{{u"project"_s, u"new"_s}, {u"dir"_s}, u"Create a project folder (FR-PRJ-1)."_s, {name, gaStyle}, projectNew},
@@ -633,13 +797,19 @@ std::vector<Command> projectCommands()
 		{{u"topology"_s, u"add-line"_s}, {u"dir"_s, u"areaId"_s, u"number"_s, u"name"_s},
 			u"Add a line to an area (FR-TOP-1); prints its id."_s, {medium}, topologyAddLine},
 		{{u"topology"_s, u"add-device"_s}, {u"dir"_s, u"lineId"_s, u"name"_s},
-			u"Add a device to a line (FR-TOP-2); prints its id."_s, {number, place}, topologyAddDevice},
+			u"Add a device to a line (FR-TOP-2); prints its id."_s, {number, place, product, application}, topologyAddDevice},
 		{{u"co"_s, u"add"_s}, {u"dir"_s, u"deviceId"_s, u"number"_s, u"name"_s},
 			u"Add a manually defined com object; prints its id."_s, {size, flags, dptOption, function}, coAdd},
 		{{u"ga"_s, u"add"_s}, {u"dir"_s, u"address"_s, u"name"_s}, u"Add a group address (FR-GA-1); prints its id."_s,
 			{dptOption}, gaAdd},
 		{{u"link"_s}, {u"dir"_s, u"comObjectId"_s, u"groupAddressId"_s},
 			u"Link a com object to a group address (FR-GA-3); prints the link id."_s, {}, linkAdd},
+		{{u"device"_s, u"param"_s}, {u"dir"_s, u"deviceId"_s, u"parameterRef"_s, u"value"_s},
+			u"Set a device parameter (ParameterRef id); with --reset the value is ignored (FR-DEV-1)."_s, {reset},
+			deviceParam},
+		{{u"device"_s, u"link"_s}, {u"dir"_s, u"deviceId"_s, u"comObject"_s, u"groupAddress"_s},
+			u"Link a catalog com object (ComObjectRef id or number) to a group address, creating both if needed (FR-GA-3)."_s,
+			{knxprodOption, gaName}, deviceLink},
 		{{u"validate"_s}, {u"dir"_s}, u"Run the project checks (FR-GA-4); exit 1 if any error."_s, {}, validateProject},
 	};
 }

@@ -1,0 +1,9 @@
+{
+  "interfaceAddress": "1.1.255",
+  "tunnelAddresses": ["1.1.250"],
+  "friendlyName": "Kestrel simulator",
+  "serial": "FFFF:00000001",
+  "devices": [
+    { "name": "button", "address": "1.1.10", "serial": "FFFF:0000B0B0", "maskVersion": "07B0", "groupObjects": [] }
+  ]
+}

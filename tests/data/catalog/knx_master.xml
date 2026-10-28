@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic master data for the M-FFFF fixture (ADR-009). The System B "ap1" load procedure is written
+     from Kestrel's own understanding of the load sequence, as verified on real hardware (specs/04 field notes). -->
+<KNX xmlns="http://knx.org/xml/project/20">
+  <MasterData Version="0" Signature="">
+    <MaskVersions>
+      <MaskVersion Id="MV-07B0" MaskVersion="1968" Name="System B" ManagementModel="SystemB" MediumTypeRefId="MT-0">
+        <HawkConfigurationData Ets3SystemPlugin="">
+          <Procedures>
+            <Procedure ProcedureType="Load" ProcedureSubType="ap1">
+              <LdCtrlConnect />
+              <LdCtrlMerge MergeId="1" />
+              <LdCtrlUnload LsmIdx="4" />
+              <LdCtrlUnload LsmIdx="3" />
+              <LdCtrlUnload LsmIdx="2" />
+              <LdCtrlUnload LsmIdx="1" />
+              <LdCtrlLoad LsmIdx="4" />
+              <LdCtrlMerge MergeId="2" />
+              <LdCtrlLoad LsmIdx="3" />
+              <LdCtrlRelSegment LsmIdx="3" Size="2" Mode="0" Fill="0" />
+              <LdCtrlLoad LsmIdx="1" />
+              <LdCtrlRelSegment LsmIdx="1" Size="2" Mode="0" Fill="0" />
+              <LdCtrlLoad LsmIdx="2" />
+              <LdCtrlRelSegment LsmIdx="2" Size="2" Mode="0" Fill="0" />
+              <LdCtrlMerge MergeId="4" />
+              <LdCtrlWriteRelMem ObjIdx="3" Offset="0" Size="1048576" Verify="true" />
+              <LdCtrlWriteRelMem ObjIdx="2" Offset="0" Size="1048576" Verify="true" />
+              <LdCtrlWriteRelMem ObjIdx="1" Offset="0" Size="1048576" Verify="true" />
+              <LdCtrlWriteProp ObjIdx="4" PropId="13" Verify="true" InlineData="0000000000" />
+              <LdCtrlLoadCompleted LsmIdx="4" />
+              <LdCtrlLoadCompleted LsmIdx="3" />
+              <LdCtrlLoadCompleted LsmIdx="2" />
+              <LdCtrlLoadCompleted LsmIdx="1" />
+              <LdCtrlMerge MergeId="7" />
+              <LdCtrlRestart />
+            </Procedure>
+          </Procedures>
+        </HawkConfigurationData>
+      </MaskVersion>
+    </MaskVersions>
+    <Manufacturers>
+      <Manufacturer Id="M-FFFF" Name="Kestrel Test Manufacturer" KnxManufacturerId="65535" />
+    </Manufacturers>
+  </MasterData>
+</KNX>

@@ -21,6 +21,7 @@
 #include <QJsonValue>
 #include <QTimer>
 
+#include <array>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -979,14 +980,12 @@ int deviceImport(Invocation& inv)
 		return inv.out.failure(kExitFindings, loaded.error());
 	}
 	const catalog::ProductDatabase& database = loaded->database;
+	// Without --application, the device's program version (PID 13) selects the application below.
 	const catalog::ApplicationProgram* app = chooseProgram(inv, database);
-	if (!app)
+	if (inv.isSet(u"application"_s) && !app)
 	{
-		return inv.out.failure(kExitUsage, u"choose the application program with --application"_s, u"Usage"_s);
-	}
-	if (app->maskVersion != u"MV-07B0")
-	{
-		return inv.out.failure(kExitFindings, u"only System B (MV-07B0) devices can be imported yet"_s, u"Unsupported"_s);
+		return inv.out.failure(kExitUsage, u"no application %1 in the product file"_s.arg(inv.value(u"application"_s)),
+			u"Usage"_s);
 	}
 	const QString projectDir = inv.value(u"project"_s);
 	auto project = persist::load(projectDir);
@@ -1017,6 +1016,35 @@ int deviceImport(Invocation& inv)
 						return;
 					}
 					const auto& r = *results;
+					if (!app && r[8] && r[8]->size() == 5)
+					{
+						// Same manufacturer and application number; the exact version if present, else the newest.
+						const QByteArray version = *r[8];
+						for (const catalog::ApplicationProgram& candidate : database.applicationPrograms)
+						{
+							const Bytes id = appconfig::programVersion(database.manufacturerId, candidate);
+							if (static_cast<std::uint8_t>(version[0]) == id[0] && static_cast<std::uint8_t>(version[1]) == id[1]
+								&& static_cast<std::uint8_t>(version[2]) == id[2] && static_cast<std::uint8_t>(version[3]) == id[3]
+								&& (!app || id[4] == static_cast<std::uint8_t>(version[4])
+									|| (app->applicationVersion != static_cast<std::uint8_t>(version[4])
+										&& candidate.applicationVersion > app->applicationVersion)))
+							{
+								app = &candidate;
+							}
+						}
+					}
+					if (!app)
+					{
+						finish(inv.out.failure(kExitFindings,
+							u"the device's application is not in this product file (use --application)"_s, u"NotFound"_s));
+						return;
+					}
+					if (app->maskVersion != u"MV-07B0")
+					{
+						finish(inv.out.failure(kExitFindings, u"only System B (MV-07B0) devices can be imported yet"_s,
+							u"Unsupported"_s));
+						return;
+					}
 					if (r[8])
 					{
 						const QByteArray version = *r[8];
@@ -1037,50 +1065,108 @@ int deviceImport(Invocation& inv)
 									.arg(expected[4], 2, 16, QLatin1Char('0')));
 						}
 					}
-					QList<app::ManagementRead> memory;
+					// Segment sizes: PID_MCB_TABLE when the load procedure wrote one; otherwise the table header
+					// (u16 count) for objects 1..3 and the product file's segment size for the parameters.
+					auto where = std::make_shared<std::array<std::uint32_t, 4>>();
+					auto size = std::make_shared<std::array<std::uint32_t, 4>>();
+					QList<app::ManagementRead> headers;
+					QList<int> headerObjects;
 					for (int object = 0; object < 4; ++object)
 					{
-						if (!r[2 * object] || !r[2 * object + 1])
+						if (!r[2 * object])
 						{
-							finish(inv.out.failure(kExitBus, u"object %1: table reference or MCB not readable"_s
-															 .arg(object + 1),
-								u"ProtocolError"_s));
+							finish(inv.out.failure(kExitBus,
+								u"object %1: table reference not readable"_s.arg(object + 1), u"ProtocolError"_s));
 							return;
 						}
-						const std::uint32_t where = beValue(*r[2 * object], 4);
-						const std::uint32_t size = beValue(*r[2 * object + 1], 4);
-						if (where + size > 0x10000 || size == 0)
+						(*where)[static_cast<std::size_t>(object)] = beValue(*r[2 * object], 4);
+						(*size)[static_cast<std::size_t>(object)] = r[2 * object + 1] ? beValue(*r[2 * object + 1], 4) : 0;
+						if ((*size)[static_cast<std::size_t>(object)] != 0)
 						{
-							finish(inv.out.failure(kExitBus, u"object %1: segment 0x%2 size %3 not readable"_s
-															 .arg(object + 1)
-															 .arg(where, 0, 16)
-															 .arg(size),
-								u"Unsupported"_s));
-							return;
+							continue;
 						}
-						memory.append(app::ManagementRead::memory(static_cast<std::uint16_t>(where),
-							static_cast<std::uint16_t>(size)));
-					}
-					// 2. The segments themselves.
-					session.readManagement(*address, memory,
-						[&, finish](Result<QList<Result<QByteArray>>> data)
+						if (object == 3)
 						{
-							if (!data)
+							for (const catalog::RelativeSegment& segment : app->relativeSegments)
 							{
-								finish(inv.out.failure(busExitCode(data.error()), data.error()));
+								if (segment.loadStateMachine == 4)
+								{
+									(*size)[3] = segment.size;
+								}
+							}
+						}
+						else
+						{
+							headers.append(app::ManagementRead::memory(
+								static_cast<std::uint16_t>((*where)[static_cast<std::size_t>(object)]), 2));
+							headerObjects.append(object);
+						}
+					}
+					auto readSegments = [&, finish, where, size]()
+					{
+						QList<app::ManagementRead> memory;
+						for (std::size_t object = 0; object < 4; ++object)
+						{
+							if ((*where)[object] + (*size)[object] > 0x10000 || (*size)[object] == 0)
+							{
+								finish(inv.out.failure(kExitBus, u"object %1: segment 0x%2 size %3 not readable"_s
+																 .arg(object + 1)
+																 .arg((*where)[object], 0, 16)
+																 .arg((*size)[object]),
+									u"Unsupported"_s));
 								return;
 							}
-							for (int object = 0; object < 4; ++object)
+							memory.append(app::ManagementRead::memory(static_cast<std::uint16_t>((*where)[object]),
+								static_cast<std::uint16_t>((*size)[object])));
+						}
+						// 2. The segments themselves.
+						session.readManagement(*address, memory,
+							[&, finish](Result<QList<Result<QByteArray>>> data)
 							{
-								if (!(*data)[object])
+								if (!data)
 								{
-									finish(inv.out.failure(busExitCode((*data)[object].error()), (*data)[object].error()));
+									finish(inv.out.failure(busExitCode(data.error()), data.error()));
 									return;
 								}
-								const QByteArray& bytes = *(*data)[object];
-								images[static_cast<std::uint8_t>(object + 1)] = Bytes(bytes.begin(), bytes.end());
+								for (int object = 0; object < 4; ++object)
+								{
+									if (!(*data)[object])
+									{
+										finish(inv.out.failure(busExitCode((*data)[object].error()), (*data)[object].error()));
+										return;
+									}
+									const QByteArray& bytes = *(*data)[object];
+									images[static_cast<std::uint8_t>(object + 1)] = Bytes(bytes.begin(), bytes.end());
+								}
+								finish(kExitOk);
+							});
+					};
+					if (headers.isEmpty())
+					{
+						readSegments();
+						return;
+					}
+					session.readManagement(*address, headers,
+						[&, finish, size, headerObjects, readSegments](Result<QList<Result<QByteArray>>> counts)
+						{
+							if (!counts)
+							{
+								finish(inv.out.failure(busExitCode(counts.error()), counts.error()));
+								return;
 							}
-							finish(kExitOk);
+							for (qsizetype i = 0; i < headerObjects.size(); ++i)
+							{
+								if (!(*counts)[i])
+								{
+									finish(inv.out.failure(busExitCode((*counts)[i].error()), (*counts)[i].error()));
+									return;
+								}
+								const int object = headerObjects[i];
+								const std::uint32_t entries = beValue(*(*counts)[i], 2);
+								const std::uint32_t entrySize = object == 1 ? 4u : 2u; // association pairs: 4 octets
+								(*size)[static_cast<std::size_t>(object)] = 2 + entries * entrySize;
+							}
+							readSegments();
 						});
 				});
 		});

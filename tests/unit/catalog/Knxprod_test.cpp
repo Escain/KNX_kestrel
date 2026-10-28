@@ -80,11 +80,27 @@ UNIT_TEST(FR_CAT_1__knxprodFixtureIsUpToDate)
 		ASSERT(entry.has_value());
 		ASSERT(QByteArray(reinterpret_cast<const char*>(entry->data()), static_cast<qsizetype>(entry->size())) == content);
 	}
-	auto fromFolder = parsePackage(folder);
+	// The zip also carries the synthetic knx_master.xml (tests/data/catalog/knx_master.xml).
+	QFile masterFile(QStringLiteral(KESTREL_TEST_DATA_DIR "/catalog/knx_master.xml"));
+	ASSERT(masterFile.open(QIODevice::ReadOnly));
+	PackageFiles withMaster = folder;
+	withMaster[u"knx_master.xml"_s] = masterFile.readAll();
+	auto master = zip->read("knx_master.xml");
+	ASSERT(master.has_value());
+	ASSERT(QByteArray(reinterpret_cast<const char*>(master->data()), static_cast<qsizetype>(master->size()))
+		== withMaster[u"knx_master.xml"_s]);
+	auto fromFolder = parsePackage(withMaster);
 	auto fromZip = loadKnxprodFile(fixture::knxprodPath());
 	ASSERT(fromFolder.has_value() && fromZip.has_value());
-	fromFolder->database.hasMasterData = true; // the zip adds a stand-in knx_master.xml
 	ASSERT(fromFolder->database == fromZip->database);
+
+	// Mask procedures sit below HawkConfigurationData.
+	const MaskVersionInfo* systemB = fromZip->database.findMaskVersion(u"MV-07B0");
+	ASSERT(systemB != nullptr);
+	const MaskProcedure* ap1 = systemB->procedure(u"Load", u"ap1");
+	ASSERT(ap1 != nullptr);
+	ASSERT_EQ(ap1->controls.front().element, u"LdCtrlConnect"_s);
+	ASSERT_EQ(ap1->controls.back().element, u"LdCtrlRestart"_s);
 }
 
 UNIT_TEST(FR_CAT_1__hardwareAndProducts)
