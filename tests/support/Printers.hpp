@@ -5,6 +5,7 @@
 // by ordinary lookup. Include before <UnitTests.hpp>.
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <ostream>
 #include <utility>
@@ -47,4 +48,17 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& values)
 		os << (i ? ", " : "") << values[i];
 	}
 	return os << ']';
+}
+
+template <typename K, typename V>
+std::ostream& operator<<(std::ostream& os, const std::map<K, V>& values)
+{
+	os << '{';
+	bool first = true;
+	for (const auto& [key, value] : values)
+	{
+		os << (first ? "" : ", ") << key << ": " << value;
+		first = false;
+	}
+	return os << '}';
 }

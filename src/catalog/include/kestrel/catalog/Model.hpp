@@ -142,6 +142,7 @@ struct RelativeSegment
 	unsigned offset = 0;
 	unsigned size = 0;
 	unsigned loadStateMachine = 0;
+	std::optional<QByteArray> data; ///< decoded <Data>: the initial content (ETS overlays parameters on it)
 	AttributeMap attributes;
 
 	friend bool operator==(const RelativeSegment&, const RelativeSegment&) = default;

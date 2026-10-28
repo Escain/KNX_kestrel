@@ -693,8 +693,28 @@ void DocumentParser::parseCode(ApplicationProgram& app)
 			segment.offset = toUnsigned(segment.attributes, u"Offset"_s);
 			segment.size = toUnsigned(segment.attributes, u"Size"_s);
 			segment.loadStateMachine = toUnsigned(segment.attributes, u"LoadStateMachine"_s);
+			while (m_xml.readNextStartElement())
+			{
+				if (is(u"Data"))
+				{
+					QByteArray base64 = m_xml.readElementText(QXmlStreamReader::SkipChildElements).toLatin1();
+					base64.removeIf([](char c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; });
+					auto decoded = QByteArray::fromBase64Encoding(base64, QByteArray::AbortOnBase64DecodingErrors);
+					if (decoded)
+					{
+						segment.data = *decoded;
+					}
+					else
+					{
+						warn(u"%1: invalid base64 in <Data>"_s.arg(segment.id));
+					}
+				}
+				else
+				{
+					skip();
+				}
+			}
 			app.relativeSegments.push_back(std::move(segment));
-			skip();
 		}
 		else
 		{
