@@ -24,28 +24,47 @@ std::vector<download::LdCtrl> toLdCtrls(const std::vector<catalog::LoadControl>&
 Result<download::Plan> planDownload(const catalog::ProductDatabase& database, const catalog::ApplicationProgram& app,
 	std::map<std::uint8_t, Bytes> images, const Bytes& programVersion, const QString& subType)
 {
-	if (app.loadProcedureStyle != u"MergedProcedure")
+	download::ResolveInput input;
+	if (app.loadProcedureStyle == u"ProductProcedure")
+	{
+		// The application carries the whole procedure.
+		for (const catalog::LoadProcedure& procedure : app.loadProcedures)
+		{
+			const auto controls = toLdCtrls(procedure.controls);
+			input.procedure.insert(input.procedure.end(), controls.begin(), controls.end());
+		}
+		if (input.procedure.empty())
+		{
+			return makeError(ErrorCode::NotFound, "the application has no load procedure");
+		}
+	}
+	else if (app.loadProcedureStyle == u"MergedProcedure" || app.loadProcedureStyle == u"DefaultProcedure")
+	{
+		const catalog::MaskVersionInfo* mask = database.findMaskVersion(app.maskVersion);
+		const catalog::MaskProcedure* procedure = mask ? mask->procedure(u"Load", subType) : nullptr;
+		if (!procedure)
+		{
+			return makeError(ErrorCode::NotFound, "no Load procedure \"" + subType.toStdString() + "\" for "
+					+ app.maskVersion.toStdString() + " in the product file's knx_master.xml");
+		}
+		input.procedure = toLdCtrls(procedure->controls);
+		if (app.loadProcedureStyle == u"MergedProcedure")
+		{
+			for (const catalog::LoadProcedure& merge : app.loadProcedures)
+			{
+				if (merge.mergeId)
+				{
+					auto& list = input.merges[static_cast<int>(*merge.mergeId)];
+					const auto controls = toLdCtrls(merge.controls);
+					list.insert(list.end(), controls.begin(), controls.end());
+				}
+			}
+		}
+	}
+	else
 	{
 		return makeError(ErrorCode::Unsupported,
-			"load procedure style " + app.loadProcedureStyle.toStdString() + " is not supported yet");
-	}
-	const catalog::MaskVersionInfo* mask = database.findMaskVersion(app.maskVersion);
-	const catalog::MaskProcedure* procedure = mask ? mask->procedure(u"Load", subType) : nullptr;
-	if (!procedure)
-	{
-		return makeError(ErrorCode::NotFound, "no Load procedure \"" + subType.toStdString() + "\" for "
-				+ app.maskVersion.toStdString() + " in the product file's knx_master.xml");
-	}
-	download::ResolveInput input;
-	input.procedure = toLdCtrls(procedure->controls);
-	for (const catalog::LoadProcedure& merge : app.loadProcedures)
-	{
-		if (merge.mergeId)
-		{
-			auto& list = input.merges[static_cast<int>(*merge.mergeId)];
-			const auto controls = toLdCtrls(merge.controls);
-			list.insert(list.end(), controls.begin(), controls.end());
-		}
+			"load procedure style \"" + app.loadProcedureStyle.toStdString() + "\" is not supported yet");
 	}
 	input.images = std::move(images);
 	input.programVersions[4] = programVersion;
