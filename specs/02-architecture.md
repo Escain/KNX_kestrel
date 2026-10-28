@@ -21,8 +21,8 @@ Status: **v1.0** (2026-10-28), synthesised from the brainstorm room
 
 | Tier | May use | Libraries |
 |------|---------|-----------|
-| **T0** | C++20 standard library only | `base`, `knx`, `dpt`, `sim` |
-| **T1** | T0 + QtCore (+ QtNetwork in `bus`/`simnet`, + QtXml/QtSql later in `catalog`) | `model`, `persist`, `validate`, `bus`, `simnet`, `app` (later `archive`, `catalog`, `ets`) |
+| **T0** | C++20 standard library only (`archive`: + system zlib, ADR-004) | `base`, `knx`, `dpt`, `sim`, `archive` |
+| **T1** | T0 + QtCore (+ QtNetwork in `bus`/`simnet`, + QtSql later in `catalog`) | `model`, `persist`, `validate`, `catalog`, `bus`, `simnet`, `app` (later `ets`) |
 | **T2** | T1 + QtGui/Qml/Quick/Widgets | `viewmodels` (no Quick/Widgets), `qml` modules, `shell` |
 
 - `kestrel-cli` and `kestrel-sim` link T0/T1 only; they never pull in QtGui.
@@ -36,9 +36,11 @@ Status: **v1.0** (2026-10-28), synthesised from the brainstorm room
 | `kestrel::knx` | T0 | Addresses, cEMI, TPDU/APDU codecs, KNXnet/IP codecs, **sans-IO** state machines (tunnel client, management session) driven by an injected clock — see `04-knx-protocol.md` |
 | `kestrel::dpt` | T0 | Datapoint-type codecs (core DPTs hand-written), formatting |
 | `kestrel::sim` | T0 | Deterministic virtual bus + virtual devices (memory, prog-mode, IA, group objects), KNXnet/IP tunnelling *server* state machine |
+| `kestrel::archive` | T0 | Own in-memory ZIP reader over zlib: stored/deflate, ZIP64, CRC, zip-bomb and path-traversal guards (ADR-004) |
 | `kestrel::model` | T1 | Project domain model (value types), transactions, `History` (undo/redo), `ChangeSet` — see `03-domain-model.md` |
 | `kestrel::persist` | T1 | Native `.kestrel` format (deterministic JSON; folder form first, ZIP later), migrations |
 | `kestrel::validate` | T1 | Pure validation rules → `Diagnostic`s |
+| `kestrel::catalog` | T1 | `.knxprod` reader (QXmlStreamReader) → `ProductDatabase`: hardware, products, catalog, application programs, merged com objects, per-channel index, translations — see `07-catalog.md` |
 | `kestrel::bus` | T1 | Qt I/O adapters: `UdpTunnelLink` (QUdpSocket + `knx::TunnelClient`), discovery, timers; runs on a bus thread |
 | `kestrel::simnet` | T1 | `KnxIpServer`: exposes a `sim::VirtualBus` on a real UDP port (used by `kestrel-sim` and in-process Qt tests) |
 | `kestrel::app` | T1 | Use-case services shared by GUI and CLI: `BusSession` (bus thread, group read/write, monitor ring buffer, IA programming, device info) |
@@ -46,8 +48,9 @@ Status: **v1.0** (2026-10-28), synthesised from the brainstorm room
 | `kestrel_qml_*` | T2 | QML modules `Kestrel.Controls`, `Kestrel.Views` — presentation only |
 | `kestrel::shell` | T2 | `MainWindow`, `QmlHost` (QQuickWidget), docks, workspace layouts |
 
-Later milestones add `archive` (own ZIP + WinZip-AES over zlib/OpenSSL, ADR-004), `catalog` (knxprod index,
-application-program model, dynamic evaluator, memory-image builder), `ets` (knxproj import), `download`
+M2 started `archive` (own ZIP reader; writer and WinZip-AES over OpenSSL later, ADR-004) and `catalog` (knxprod
+reader and application-program model, `07-catalog.md`; later the user index, dynamic evaluator, memory-image builder).
+Later milestones add `ets` (knxproj import), `download`
 (procedure resolver / planner / executor, ADR-008).
 
 ## 3. Key mechanisms

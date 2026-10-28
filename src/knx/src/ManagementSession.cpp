@@ -75,6 +75,19 @@ ManagementSession::RequestId ManagementSession::propertyValueRead(std::uint8_t o
 	return enqueue(std::move(operation), now);
 }
 
+ManagementSession::RequestId ManagementSession::propertyValueWrite(std::uint8_t objectIndex, std::uint8_t propertyId,
+	std::uint8_t count, std::uint16_t startIndex, ByteView data, TimePoint now)
+{
+	Operation operation;
+	operation.kind = Kind::PropertyValueWrite;
+	operation.objectIndex = objectIndex;
+	operation.propertyId = propertyId;
+	operation.count = count;
+	operation.startIndex = startIndex;
+	operation.payload.assign(data.begin(), data.end());
+	return enqueue(std::move(operation), now);
+}
+
 ManagementSession::RequestId ManagementSession::restart(TimePoint now)
 {
 	Operation operation;
@@ -143,6 +156,9 @@ Apdu ManagementSession::buildRequest(const Operation& operation) const
 		return knx::memoryWrite(address, ByteView(operation.payload).subspan(operation.offset, chunk));
 	case Kind::PropertyValueRead:
 		return knx::propertyValueRead(operation.objectIndex, operation.propertyId, operation.count, operation.startIndex);
+	case Kind::PropertyValueWrite:
+		return knx::propertyValueWrite(
+			operation.objectIndex, operation.propertyId, operation.count, operation.startIndex, operation.payload);
 	case Kind::Restart: return knx::restart();
 	}
 	return knx::restart();
@@ -151,7 +167,7 @@ Apdu ManagementSession::buildRequest(const Operation& operation) const
 bool ManagementSession::expectsResponse(const Operation& operation) const
 {
 	return operation.kind == Kind::DeviceDescriptorRead || operation.kind == Kind::MemoryRead
-		|| operation.kind == Kind::PropertyValueRead;
+		|| operation.kind == Kind::PropertyValueRead || operation.kind == Kind::PropertyValueWrite;
 }
 
 void ManagementSession::sendRequest(TimePoint now)
@@ -210,6 +226,7 @@ bool ManagementSession::answers(const Operation& operation, const Apdu& apdu) co
 		return access && access->address == static_cast<std::uint16_t>(operation.address + operation.offset);
 	}
 	case Kind::PropertyValueRead:
+	case Kind::PropertyValueWrite:
 	{
 		if (apdu.apci != Apci::PropertyValueResponse)
 		{
@@ -280,6 +297,7 @@ void ManagementSession::onResponse(const Apdu& apdu, TimePoint now)
 		return;
 	}
 	case Kind::PropertyValueRead:
+	case Kind::PropertyValueWrite:
 	{
 		if (apdu.apci != Apci::PropertyValueResponse)
 		{
@@ -293,7 +311,10 @@ void ManagementSession::onResponse(const Apdu& apdu, TimePoint now)
 		}
 		if (access->count == 0)
 		{
-			failCurrent(Error{ErrorCode::ProtocolError, "property read refused by the device"}, now);
+			failCurrent(Error{ErrorCode::ProtocolError,
+							operation.kind == Kind::PropertyValueWrite ? "property write refused by the device"
+																		: "property read refused by the device"},
+				now);
 			return;
 		}
 		operation.result = std::move(access->data);

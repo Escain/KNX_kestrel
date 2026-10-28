@@ -6,8 +6,8 @@ Status: Accepted (2026-10-28)
 QtCore (QString, XML, JSON, QSaveFile) so that we do not rewrite UTF-16 and XML handling.
 
 **Decision.**
-- T0 (std only): `base`, `knx`, `dpt`, `sim`.
-- T1 (QtCore, plus QtNetwork/Xml/Sql where needed): `model`, `persist`, `validate`, `bus`, `simnet`, `app`, and later `archive`, `catalog`, `ets`.
+- T0 (std only): `base`, `knx`, `dpt`, `sim`, and `archive` (std plus system zlib, see ADR-004).
+- T1 (QtCore, plus QtNetwork/Xml/Sql where needed): `model`, `persist`, `validate`, `bus`, `simnet`, `app`, `catalog`, and later `ets`.
 - T2 (GUI): `viewmodels`, the QML modules, `shell`.
 
 `cmake/KestrelLayering.cmake` fails the configure step on any violation.

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic product data for the fake manufacturer M-FFFF (ADR-009). Hand-written for Kestrel's tests. -->
+<KNX xmlns="http://knx.org/xml/project/20" CreatedBy="Kestrel test fixtures" ToolVersion="0.0.0">
+  <ManufacturerData>
+    <Manufacturer RefId="M-FFFF">
+      <Hardware>
+        <Hardware Id="M-FFFF_H-KTB2-1" Name="Kestrel Testtaster 2-fach" SerialNumber="KTB2" VersionNumber="1" BusCurrent="10" HasIndividualAddress="true" HasApplicationProgram="true">
+          <Products>
+            <Product Id="M-FFFF_H-KTB2-1_P-KTB.2D2" Text="Kestrel Testtaster 2-fach" OrderNumber="KTB-2" IsRailMounted="false" DefaultLanguage="de-DE">
+              <RegistrationInfo RegistrationStatus="Registered" />
+            </Product>
+          </Products>
+          <Hardware2Programs>
+            <Hardware2Program Id="M-FFFF_H-KTB2-1_HP-0001-10-0001" MediumTypes="MT-0">
+              <ApplicationProgramRef RefId="M-FFFF_A-0001-10-0001" />
+              <RegistrationInfo RegistrationStatus="Registered" />
+            </Hardware2Program>
+          </Hardware2Programs>
+        </Hardware>
+        <Hardware Id="M-FFFF_H-KSA8-1" Name="Kestrel Test Switch Actuator 8-fold" SerialNumber="KSA8" VersionNumber="1" BusCurrent="12" HasIndividualAddress="true" HasApplicationProgram="true">
+          <Products>
+            <Product Id="M-FFFF_H-KSA8-1_P-KSA.2D8" Text="Kestrel Test Switch Actuator 8-fold" OrderNumber="KSA-8" IsRailMounted="true" WidthInMillimeter="72" DefaultLanguage="en-US">
+              <RegistrationInfo RegistrationStatus="Registered" />
+            </Product>
+          </Products>
+          <Hardware2Programs>
+            <Hardware2Program Id="M-FFFF_H-KSA8-1_HP-0002-21-0001" MediumTypes="MT-0">
+              <ApplicationProgramRef RefId="M-FFFF_A-0002-21-0001" />
+              <RegistrationInfo RegistrationStatus="Registered" />
+            </Hardware2Program>
+          </Hardware2Programs>
+        </Hardware>
+      </Hardware>
+      <Languages>
+        <Language Identifier="en-US">
+          <TranslationUnit RefId="M-FFFF_H-KTB2-1">
+            <TranslationElement RefId="M-FFFF_H-KTB2-1">
+              <Translation AttributeName="Name" Text="Kestrel Test Button 2-fold" />
+            </TranslationElement>
+            <TranslationElement RefId="M-FFFF_H-KTB2-1_P-KTB.2D2">
+              <Translation AttributeName="Text" Text="Kestrel Test Button 2-fold" />
+            </TranslationElement>
+          </TranslationUnit>
+        </Language>
+        <Language Identifier="de-DE">
+          <TranslationUnit RefId="M-FFFF_H-KSA8-1">
+            <TranslationElement RefId="M-FFFF_H-KSA8-1_P-KSA.2D8">
+              <Translation AttributeName="Text" Text="Kestrel Testschaltaktor 8-fach" />
+            </TranslationElement>
+          </TranslationUnit>
+        </Language>
+      </Languages>
+    </Manufacturer>
+  </ManufacturerData>
+</KNX>

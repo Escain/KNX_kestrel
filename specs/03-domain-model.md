@@ -141,6 +141,8 @@ project opens and these problems are shown.
 `validate::run(const Project&) → std::vector<Diagnostic>` returns diagnostics sorted by severity, then code, then subject.
 
 ## 6. Later (M2+)
+The product-database model read from `.knxprod` files is described in `07-catalog.md` (M2, first slice).
+
 `archive` (own ZIP reader/writer + WinZip-AES), `catalog` (user-level SQLite index + verbatim compressed application XML,
 lazy parsed, LRU-cached immutable `ApplicationProgram`), `ets` (knxproj import: stream to IR → map → diagnostics,
 schema 11..23 quirk table), and the import report for elements we drop.

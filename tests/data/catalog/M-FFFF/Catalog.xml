@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic product data for the fake manufacturer M-FFFF (ADR-009). Hand-written for Kestrel's tests. -->
+<KNX xmlns="http://knx.org/xml/project/20" CreatedBy="Kestrel test fixtures" ToolVersion="0.0.0">
+  <ManufacturerData>
+    <Manufacturer RefId="M-FFFF">
+      <Catalog>
+        <CatalogSection Id="M-FFFF_CS-1" Name="Taster" Number="1" DefaultLanguage="de-DE">
+          <CatalogItem Id="M-FFFF_H-KTB2-1_HP-0001-10-0001_CI-KTB.2D2-1" Name="Kestrel Testtaster 2-fach" Number="1" ProductRefId="M-FFFF_H-KTB2-1_P-KTB.2D2" Hardware2ProgramRefId="M-FFFF_H-KTB2-1_HP-0001-10-0001" DefaultLanguage="de-DE" />
+        </CatalogSection>
+        <CatalogSection Id="M-FFFF_CS-2" Name="Actuators" Number="2" DefaultLanguage="en-US">
+          <CatalogSection Id="M-FFFF_CS-2-1" Name="Switch actuators" Number="1" DefaultLanguage="en-US">
+            <CatalogItem Id="M-FFFF_H-KSA8-1_HP-0002-21-0001_CI-KSA.2D8-1" Name="Kestrel Test Switch Actuator 8-fold" Number="1" ProductRefId="M-FFFF_H-KSA8-1_P-KSA.2D8" Hardware2ProgramRefId="M-FFFF_H-KSA8-1_HP-0002-21-0001" DefaultLanguage="en-US" />
+          </CatalogSection>
+        </CatalogSection>
+      </Catalog>
+      <Languages>
+        <Language Identifier="en-US">
+          <TranslationUnit RefId="M-FFFF_CS-1">
+            <TranslationElement RefId="M-FFFF_CS-1">
+              <Translation AttributeName="Name" Text="Push buttons" />
+            </TranslationElement>
+            <TranslationElement RefId="M-FFFF_H-KTB2-1_HP-0001-10-0001_CI-KTB.2D2-1">
+              <Translation AttributeName="Name" Text="Kestrel Test Button 2-fold" />
+            </TranslationElement>
+          </TranslationUnit>
+        </Language>
+      </Languages>
+    </Manufacturer>
+  </ManufacturerData>
+</KNX>

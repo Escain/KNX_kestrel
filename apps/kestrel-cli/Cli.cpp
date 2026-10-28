@@ -112,6 +112,10 @@ int dispatch(const QStringList& arguments)
 	{
 		commands.push_back(std::move(command));
 	}
+	for (Command& command : catalogCommands())
+	{
+		commands.push_back(std::move(command));
+	}
 
 	// Longest matching command word sequence.
 	const Command* match = nullptr;

@@ -15,6 +15,7 @@
 //   kestrel-cli ga add <dir> <address> <name> [--dpt X]
 //   kestrel-cli link <dir> <coId> <gaId>
 //   kestrel-cli validate <dir>
+//   kestrel-cli catalog inspect <file.knxprod> [--language de-DE]
 //
 // Every command accepts --json (one JSON object on stdout; "ok" tells success). Commands that create
 // an entity print its id (text mode: the id alone, so scripts can chain).

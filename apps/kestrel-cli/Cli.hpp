@@ -74,6 +74,7 @@ struct Command
 
 std::vector<Command> busCommands();
 std::vector<Command> projectCommands();
+std::vector<Command> catalogCommands();
 
 /// Dispatches argv (without the program name) to a command. Returns the exit code.
 int dispatch(const QStringList& arguments);

@@ -100,6 +100,10 @@ public:
 	RequestId memoryWrite(std::uint16_t address, ByteView data, TimePoint now);
 	RequestId propertyValueRead(std::uint8_t objectIndex, std::uint8_t propertyId, std::uint8_t count,
 		std::uint16_t startIndex, TimePoint now);
+	/// Completed data: the property data of the device's answer (for PID_LOAD_STATE_CONTROL, the new
+	/// load state); a count-0 answer fails the request.
+	RequestId propertyValueWrite(std::uint8_t objectIndex, std::uint8_t propertyId, std::uint8_t count,
+		std::uint16_t startIndex, ByteView data, TimePoint now);
 	RequestId restart(TimePoint now);
 	/// Cancels queued requests (Failed/Cancelled) and disconnects.
 	void close(TimePoint now);
@@ -119,6 +123,7 @@ private:
 		MemoryRead,
 		MemoryWrite,
 		PropertyValueRead,
+		PropertyValueWrite,
 		Restart,
 	};
 

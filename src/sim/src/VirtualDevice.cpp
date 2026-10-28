@@ -87,6 +87,19 @@ VirtualDevice::VirtualDevice(VirtualBus& bus, DeviceConfig config, Config timing
 	m_properties[{0, pid::kObjectType}] = Bytes{0x00, 0x00};
 	m_properties[{0, pid::kSerialNumber}] = Bytes(serial.begin(), serial.end());
 	m_properties[{0, pid::kManufacturerId}] = Bytes(serial.begin(), serial.begin() + 2);
+	if (m_config.maskVersion == 0x07B0)
+	{
+		// The interface objects of a System B device, laid out like the MEAN WELL KAA-8R this was checked
+		// against: object index = load state machine index, fixed segment addresses (specs/04 field notes).
+		for (const auto& [index, type] : kSystemBObjects)
+		{
+			m_properties[{index, pid::kObjectType}] = Bytes{static_cast<std::uint8_t>(type >> 8), static_cast<std::uint8_t>(type)};
+			m_properties[{index, pid::kLoadStateControl}] = Bytes{0x00};
+			m_properties[{index, pid::kTableReference}] = Bytes{0x00, 0x00, 0x00, 0x00};
+			m_properties[{index, pid::kProgramVersion}] = Bytes(5, 0x00);
+			m_properties[{index, pid::kMcbTable}] = Bytes(8, 0x00);
+		}
+	}
 
 	for (const auto& object : m_config.groupObjects)
 	{
@@ -95,6 +108,60 @@ VirtualDevice::VirtualDevice(VirtualBus& bus, DeviceConfig config, Config timing
 		m_shortForm.push_back(shortForm);
 	}
 	m_endpoint = m_bus.attach([this](const knx::cemi::LData& frame) { onFrame(frame); });
+}
+
+std::optional<std::uint8_t> VirtualDevice::loadState(std::uint8_t objectIndex) const
+{
+	const auto it = m_properties.find({objectIndex, pid::kLoadStateControl});
+	if (m_config.maskVersion != 0x07B0 || it == m_properties.end() || it->second.empty())
+	{
+		return std::nullopt;
+	}
+	return it->second.front();
+}
+
+std::uint8_t VirtualDevice::onLoadControl(std::uint8_t objectIndex, ByteView data)
+{
+	// States: 0 unloaded, 1 loaded, 2 loading, 3 error. Events: 1 start loading, 2 load completed,
+	// 3 additional load control, 4 unload.
+	std::uint8_t& state = m_properties[{objectIndex, pid::kLoadStateControl}].at(0);
+	const std::uint8_t event = data.empty() ? 0 : data[0];
+	switch (event)
+	{
+	case 1: state = 2; break;
+	case 2: state = state == 2 ? 1 : 3; break;
+	case 3:
+	{
+		// 0x0B: data relative allocation (size, mode, fill, 2 reserved octets).
+		if (state != 2 || data.size() < 10 || data[1] != 0x0B)
+		{
+			state = 3;
+			break;
+		}
+		const std::uint32_t size = (std::uint32_t{data[2]} << 24) | (std::uint32_t{data[3]} << 16)
+			| (std::uint32_t{data[4]} << 8) | data[5];
+		std::uint16_t base = 0;
+		for (const auto& [index, type] : kSystemBObjects)
+		{
+			if (index == objectIndex)
+			{
+				base = kSystemBSegments[index - 1];
+			}
+		}
+		if (base == 0 || std::uint32_t{base} + size > 0x10000)
+		{
+			state = 3;
+			break;
+		}
+		writeMemory(base, Bytes(size, data[7]));
+		m_properties[{objectIndex, pid::kTableReference}] =
+			Bytes{0x00, 0x00, static_cast<std::uint8_t>(base >> 8), static_cast<std::uint8_t>(base)};
+		break;
+	}
+	case 4: state = 0; break;
+	default: state = 3; break;
+	}
+	return state;
 }
 
 VirtualDevice::~VirtualDevice()
@@ -413,6 +480,11 @@ std::optional<Apdu> VirtualDevice::serve(const Apdu& apdu)
 			if (access->count != 1 || access->startIndex != 1)
 			{
 				return refuse;
+			}
+			if (access->propertyId == pid::kLoadStateControl && loadState(access->objectIndex))
+			{
+				const std::uint8_t state = onLoadControl(access->objectIndex, access->data);
+				return knx::propertyValueResponse(access->objectIndex, access->propertyId, 1, 1, Bytes{state});
 			}
 			it->second = access->data;
 		}

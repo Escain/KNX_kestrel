@@ -84,7 +84,16 @@ namespace pid
 constexpr std::uint8_t kObjectType = 1;
 constexpr std::uint8_t kSerialNumber = 11;
 constexpr std::uint8_t kManufacturerId = 12;
+constexpr std::uint8_t kLoadStateControl = 5;
+constexpr std::uint8_t kTableReference = 7;
+constexpr std::uint8_t kProgramVersion = 13;
+constexpr std::uint8_t kMcbTable = 27;
 } // namespace pid
+
+/// System B (mask 07B0) interface objects: (object index, object type) and the segment address the
+/// simulated device allocates for each.
+inline constexpr std::pair<std::uint8_t, std::uint16_t> kSystemBObjects[] = {{1, 1}, {2, 2}, {3, 9}, {4, 3}, {5, 4}};
+inline constexpr std::uint16_t kSystemBSegments[] = {0x1002, 0x1804, 0x2806, 0x2A18, 0x4000};
 
 class VirtualDevice
 {
@@ -118,6 +127,8 @@ public:
 
 	void setProperty(std::uint8_t objectIndex, std::uint8_t propertyId, Bytes value);
 	std::optional<Bytes> property(std::uint8_t objectIndex, std::uint8_t propertyId) const;
+	/// System B (mask 07B0) only: state of the load state machine of an interface object (1..5).
+	std::optional<std::uint8_t> loadState(std::uint8_t objectIndex) const;
 
 	const std::vector<GroupObjectConfig>& groupObjects() const { return m_config.groupObjects; }
 	/// Value of the first group object bound to `address`.
@@ -139,6 +150,8 @@ private:
 	void onTransport(knx::IndividualAddress source, const knx::Tpdu& tpdu);
 	/// Executes a point-to-point service; returns the response APDU, if any.
 	std::optional<knx::Apdu> serve(const knx::Apdu& apdu);
+	/// PID_LOAD_STATE_CONTROL write on a System B interface object; returns the new state.
+	std::uint8_t onLoadControl(std::uint8_t objectIndex, ByteView data);
 	void sendGroup(knx::GroupAddress address, knx::Apci apci, std::size_t objectIndex);
 	void sendTo(knx::IndividualAddress destination, const knx::Tpdu& tpdu);
 	void sendBroadcast(const knx::Apdu& apdu);

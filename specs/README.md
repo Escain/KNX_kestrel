@@ -8,6 +8,7 @@
 | [04-knx-protocol.md](04-knx-protocol.md) | KNX stack layering, bus access, commissioning state machine, simulator |
 | [05-test-strategy.md](05-test-strategy.md) | Test pyramid, tools, traceability matrix |
 | [06-roadmap.md](06-roadmap.md) | Milestones |
+| [07-catalog.md](07-catalog.md) | Product files (`.knxprod`): ZIP reader, catalog model, tolerance rules |
 | [adr/](adr/) | Architecture Decision Records (one decision per file) |
 | [brainstorm/](brainstorm/) | Raw brainstorm-room proposals (round 1) and cross-critiques (round 2) |
 
