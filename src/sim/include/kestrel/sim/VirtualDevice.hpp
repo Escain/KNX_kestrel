@@ -173,6 +173,8 @@ private:
 	bool m_trafficSinceTick = false;
 	std::optional<knx::TimePoint> m_lastActivity;
 	bool m_restartPending = false;
+	/// A_Authorize received on the current transport connection (System B refuses writes otherwise).
+	bool m_authorized = false;
 };
 
 } // namespace kestrel::sim

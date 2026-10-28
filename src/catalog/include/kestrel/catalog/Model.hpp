@@ -345,6 +345,31 @@ struct LoadProcedure
 	friend bool operator==(const LoadProcedure&, const LoadProcedure&) = default;
 };
 
+/// knx_master.xml MaskVersion/Procedures/Procedure: the mask's own load procedure, into which an application
+/// with LoadProcedureStyle="MergedProcedure" merges its LoadProcedures by MergeId.
+struct MaskProcedure
+{
+	QString type;    ///< ProcedureType, e.g. "Load"
+	QString subType; ///< ProcedureSubType, e.g. "all", "ap1", "par"
+	QString access;
+	std::vector<LoadControl> controls;
+
+	friend bool operator==(const MaskProcedure&, const MaskProcedure&) = default;
+};
+
+/// knx_master.xml MaskVersion (only what downloads need).
+struct MaskVersionInfo
+{
+	QString id; ///< "MV-07B0"
+	unsigned maskVersion = 0;
+	QString name;
+	QString managementModel;
+	std::vector<MaskProcedure> procedures;
+
+	const MaskProcedure* procedure(QStringView type, QStringView subType) const;
+	friend bool operator==(const MaskVersionInfo&, const MaskVersionInfo&) = default;
+};
+
 std::ostream& operator<<(std::ostream& os, const AbsoluteSegment& value);
 std::ostream& operator<<(std::ostream& os, const RelativeSegment& value);
 std::ostream& operator<<(std::ostream& os, const EnumerationEntry& value);
@@ -517,9 +542,11 @@ struct ProductDatabase
 	std::vector<ApplicationProgram> applicationPrograms;
 	Translations translations; ///< hardware, product and catalog texts
 	QStringList files;         ///< archive paths that were parsed
-	bool hasMasterData = false; ///< knx_master.xml present (not parsed yet)
+	bool hasMasterData = false; ///< knx_master.xml present
+	std::vector<MaskVersionInfo> maskVersions; ///< from knx_master.xml
 
 	const Hardware* findHardware(QStringView id) const;
+	const MaskVersionInfo* findMaskVersion(QStringView id) const;
 	const Product* findProduct(QStringView id) const;
 	const ApplicationProgram* findApplicationProgram(QStringView id) const;
 	/// Looks in the package translations, then in each application program.

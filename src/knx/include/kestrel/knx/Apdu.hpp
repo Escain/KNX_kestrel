@@ -144,6 +144,10 @@ Apdu propertyValueWrite(std::uint8_t objectIndex, std::uint8_t propertyId, std::
 
 /// Basic restart (restart type 0).
 Apdu restart();
+/// A_Authorize_Request: reserved octet + 4-octet key (0xFFFFFFFF is the default key).
+Apdu authorizeRequest(std::uint32_t key);
+/// A_Authorize_Response with the granted access level (0 = highest).
+Apdu authorizeResponse(std::uint8_t level);
 
 // ---- APDU field decoders ---------------------------------------------------------------------
 

@@ -370,6 +370,7 @@ void VirtualDevice::onTransport(knx::IndividualAddress source, const Tpdu& tpdu)
 			return;
 		}
 		m_partner = source;
+		m_authorized = false;
 		m_sendSeq = 0;
 		m_recvSeq = 0;
 		m_trafficSinceTick = true;
@@ -379,6 +380,7 @@ void VirtualDevice::onTransport(knx::IndividualAddress source, const Tpdu& tpdu)
 		if (fromPartner)
 		{
 			m_partner.reset();
+			m_authorized = false;
 		}
 		return;
 	case TpduType::DataConnected:
@@ -481,8 +483,16 @@ std::optional<Apdu> VirtualDevice::serve(const Apdu& apdu)
 			{
 				return refuse;
 			}
+			if (m_config.maskVersion == 0x07B0 && !m_authorized)
+			{
+				return refuse; // like the real device: writes need A_Authorize first
+			}
 			if (access->propertyId == pid::kLoadStateControl && loadState(access->objectIndex))
 			{
+				if (access->data.size() != 10)
+				{
+					return refuse; // the real device refuses anything but the 10-octet form
+				}
 				const std::uint8_t state = onLoadControl(access->objectIndex, access->data);
 				return knx::propertyValueResponse(access->objectIndex, access->propertyId, 1, 1, Bytes{state});
 			}
@@ -500,6 +510,13 @@ std::optional<Apdu> VirtualDevice::serve(const Apdu& apdu)
 		}
 		return knx::propertyValueResponse(access->objectIndex, access->propertyId, 1, 1, it->second);
 	}
+	case Apci::AuthorizeRequest:
+	{
+		// Only the default key is known: it grants the highest access level.
+		const bool defaultKey = apdu.data == Bytes{0x00, 0xFF, 0xFF, 0xFF, 0xFF};
+		m_authorized = defaultKey;
+		return knx::authorizeResponse(defaultKey ? 0 : 15);
+	}
 	case Apci::Restart:
 		m_restartPending = true;
 		return std::nullopt;
@@ -514,6 +531,7 @@ void VirtualDevice::doRestart()
 	++m_restarts;
 	m_config.progMode = false;
 	m_partner.reset(); // a restart silently drops the transport connection
+	m_authorized = false;
 }
 
 void VirtualDevice::tick(knx::TimePoint now)

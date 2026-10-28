@@ -88,6 +88,14 @@ ManagementSession::RequestId ManagementSession::propertyValueWrite(std::uint8_t 
 	return enqueue(std::move(operation), now);
 }
 
+ManagementSession::RequestId ManagementSession::authorize(std::uint32_t key, TimePoint now)
+{
+	Operation operation;
+	operation.kind = Kind::Authorize;
+	operation.key = key;
+	return enqueue(std::move(operation), now);
+}
+
 ManagementSession::RequestId ManagementSession::restart(TimePoint now)
 {
 	Operation operation;
@@ -159,6 +167,7 @@ Apdu ManagementSession::buildRequest(const Operation& operation) const
 	case Kind::PropertyValueWrite:
 		return knx::propertyValueWrite(
 			operation.objectIndex, operation.propertyId, operation.count, operation.startIndex, operation.payload);
+	case Kind::Authorize: return knx::authorizeRequest(operation.key);
 	case Kind::Restart: return knx::restart();
 	}
 	return knx::restart();
@@ -167,7 +176,8 @@ Apdu ManagementSession::buildRequest(const Operation& operation) const
 bool ManagementSession::expectsResponse(const Operation& operation) const
 {
 	return operation.kind == Kind::DeviceDescriptorRead || operation.kind == Kind::MemoryRead
-		|| operation.kind == Kind::PropertyValueRead || operation.kind == Kind::PropertyValueWrite;
+		|| operation.kind == Kind::PropertyValueRead || operation.kind == Kind::PropertyValueWrite
+		|| operation.kind == Kind::Authorize;
 }
 
 void ManagementSession::sendRequest(TimePoint now)
@@ -236,6 +246,8 @@ bool ManagementSession::answers(const Operation& operation, const Apdu& apdu) co
 		return access && access->objectIndex == operation.objectIndex && access->propertyId == operation.propertyId
 			&& access->startIndex == operation.startIndex;
 	}
+	case Kind::Authorize:
+		return apdu.apci == Apci::AuthorizeResponse && apdu.data.size() == 1;
 	case Kind::MemoryWrite:
 	case Kind::Restart:
 		return false;
@@ -321,6 +333,10 @@ void ManagementSession::onResponse(const Apdu& apdu, TimePoint now)
 		completeCurrent(now);
 		return;
 	}
+	case Kind::Authorize:
+		operation.result = apdu.data;
+		completeCurrent(now);
+		return;
 	case Kind::MemoryWrite:
 	case Kind::Restart:
 		return;
@@ -468,6 +484,13 @@ void ManagementSession::tick(TimePoint now)
 {
 	if (m_phase == Phase::WaitAck && now >= m_deadline)
 	{
+		if (m_operations.front().kind == Kind::Restart)
+		{
+			// Devices restart on A_Restart before acknowledging it (seen on a System B actuator). Repeating
+			// it could restart the device again, so a missing T_ACK counts as done.
+			completeCurrent(now);
+			return;
+		}
 		if (m_repetitions >= m_config.maxRepetitions)
 		{
 			failAll(Error{ErrorCode::Timeout, "no T_ACK from " + m_target.toString()});

@@ -120,3 +120,13 @@ link. Search, tunnelling, device info, `device progmode` and `program-ia` all wo
   stride 18. Group telegrams to those addresses get a negative L_Data.con (ctrl1 `0x9d`): nobody
   acknowledges them on TP. An unloaded device does not take part in group communication, so a full download
   is needed. Read-only tools for this: `kestrel-cli device objects|property|memory`.
+- **First Kestrel download (System B, MEAN WELL KAA-8R).** The ETS6 images read back earlier were
+  downloaded with the `ap1` procedure from the product file's knx_master.xml plus the application's
+  LoadProcedures (28 steps, about 70 s). Afterwards the device is loaded and channel F switches on 1/0/6,
+  with its status on 2/0/6. Findings:
+  - Property writes need **A_Authorize** first (default key FFFFFFFF, level 0), even on an unconfigured device.
+  - **PID_LOAD_STATE_CONTROL writes are always 10 octets** (event + 9 octets); a bare 1-octet event is
+    refused with count 0. Data relative allocation: `03 0B size(4) mode fill 00 00`, accepted as is.
+  - **A_Restart is not acknowledged:** the device restarts before sending T_ACK. Repeating the request
+    restarted it several times, and the relay outputs toggled. A missing T_ACK on A_Restart now counts as done.
+  - The simulator enforces all three (authorization, 10-octet load controls, and the restart behaviour by design).

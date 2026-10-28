@@ -49,6 +49,13 @@ enum class LoadEvent : std::uint8_t
 	Unload = 4,
 };
 
+/// A_Authorize_Request after connecting (LdCtrlConnect); devices refuse writes at the default access level.
+struct Authorize
+{
+	std::uint32_t key = 0xFFFFFFFF;
+	friend bool operator==(const Authorize&, const Authorize&) = default;
+};
+
 struct Unload
 {
 	std::uint8_t lsm = 0;
@@ -120,7 +127,7 @@ struct Restart
 	friend bool operator==(const Restart&, const Restart&) = default;
 };
 
-using Step = std::variant<Unload, Load, LoadCompleted, AllocRelSegment, WriteRelMem, WriteProp, CompareProp,
+using Step = std::variant<Authorize, Unload, Load, LoadCompleted, AllocRelSegment, WriteRelMem, WriteProp, CompareProp,
 	LoadImageProp, Restart>;
 
 std::ostream& operator<<(std::ostream& os, const Step& step);
@@ -131,7 +138,7 @@ struct Plan
 	friend bool operator==(const Plan&, const Plan&) = default;
 };
 
-/// PID_LOAD_STATE_CONTROL payload for a step that drives the load state machine.
+/// PID_LOAD_STATE_CONTROL payload for a step that drives the load state machine (always 10 octets).
 Bytes loadControlPayload(LoadEvent event);
 Bytes allocRelSegmentPayload(const AllocRelSegment& step);
 

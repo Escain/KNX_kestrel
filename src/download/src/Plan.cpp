@@ -23,6 +23,10 @@ namespace
 struct StepPrinter
 {
 	std::ostream& os;
+	void operator()(const Authorize& s) const
+	{
+		os << "Authorize" << (s.key == 0xFFFFFFFF ? " (default key)" : " (key set)");
+	}
 	void operator()(const Unload& s) const
 	{
 		os << "Unload LSM " << int(s.lsm) << (s.tolerateError ? " (errors ignored)" : "");
@@ -64,7 +68,11 @@ std::ostream& operator<<(std::ostream& os, const Step& step)
 
 Bytes loadControlPayload(LoadEvent event)
 {
-	return Bytes{static_cast<std::uint8_t>(event)};
+	// Load control writes have a fixed size of 10 octets (event + 9 octets of additional data); a real
+	// System B device refuses a bare 1-octet event.
+	Bytes out(10, 0x00);
+	out[0] = static_cast<std::uint8_t>(event);
+	return out;
 }
 
 Bytes allocRelSegmentPayload(const AllocRelSegment& step)

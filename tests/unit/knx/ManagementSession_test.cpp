@@ -385,6 +385,20 @@ UNIT_TEST(FR_COM_5__managementRestartDisconnects)
 	ASSERT_EQ(sent(session.takeActions()), (std::vector<Tpdu>{Tpdu::disconnect(), Tpdu::connect(), Tpdu::dataConnected(0, deviceDescriptorRead())}));
 }
 
+UNIT_TEST(FR_COM_5__managementRestartWithoutAckCompletes)
+{
+	// A real device restarted on A_Restart without sending T_ACK; the request must not be repeated.
+	auto session = newSession();
+	const auto id = session.restart(kT0);
+	(void)session.takeActions();
+	session.tick(kT0 + 3s);
+	const auto actions = session.takeActions();
+	ASSERT_EQ(only<Session::Completed>(actions), (std::vector<Session::Completed>{{id, {}}}));
+	ASSERT(only<Session::Failed>(actions).empty());
+	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::disconnect()}));
+	ASSERT(!session.connected());
+}
+
 UNIT_TEST(FR_COM_4__managementIdleDisconnect)
 {
 	auto session = newSession();

@@ -114,9 +114,15 @@ private:
 			}
 			return ok();
 		}
-		if (name == "LdCtrlConnect" || name == "LdCtrlDisconnect")
+		if (name == "LdCtrlConnect")
 		{
-			return ok(); // the executor's management session connects on demand and closes at the end
+			// The management session connects on demand; authorize right after, as devices refuse writes otherwise.
+			m_plan.steps.push_back(Authorize{});
+			return ok();
+		}
+		if (name == "LdCtrlDisconnect")
+		{
+			return ok(); // the executor closes the connection at the end
 		}
 		if (name == "LdCtrlMapError")
 		{

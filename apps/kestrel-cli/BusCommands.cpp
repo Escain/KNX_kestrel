@@ -4,10 +4,14 @@
 
 #include "kestrel/app/BusSession.hpp"
 #include "kestrel/base/Bytes.hpp"
+#include "kestrel/catalog/Knxprod.hpp"
+#include "kestrel/download/Resolver.hpp"
 #include "kestrel/dpt/Dpt.hpp"
 #include "kestrel/knx/Address.hpp"
 
+#include <QDir>
 #include <QEventLoop>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -784,6 +788,185 @@ int deviceObjects(Invocation& inv)
 		});
 }
 
+std::vector<download::LdCtrl> toLdCtrls(const std::vector<catalog::LoadControl>& controls)
+{
+	std::vector<download::LdCtrl> out;
+	for (const catalog::LoadControl& control : controls)
+	{
+		download::LdCtrl element{control.element.toStdString(), {}};
+		for (const auto& [name, value] : control.attributes)
+		{
+			element.attributes[name.toStdString()] = value.toStdString();
+		}
+		out.push_back(std::move(element));
+	}
+	return out;
+}
+
+/// Builds the download plan from the options; prints the reason and returns nullopt on failure.
+std::optional<download::Plan> downloadPlan(Invocation& inv, int& exitCode)
+{
+	auto fail = [&](const QString& message, const QString& code, int exit)
+	{
+		exitCode = inv.out.failure(exit, message, code);
+		return std::nullopt;
+	};
+	if (!inv.isSet(u"knxprod"_s) || !inv.isSet(u"images"_s))
+	{
+		return fail(u"--knxprod and --images are required"_s, u"Usage"_s, kExitUsage);
+	}
+	auto loaded = catalog::loadKnxprodFile(inv.value(u"knxprod"_s));
+	if (!loaded)
+	{
+		return fail(qs(loaded.error().message), u"ParseError"_s, kExitFindings);
+	}
+	const catalog::ProductDatabase& database = loaded->database;
+	const catalog::ApplicationProgram* program = nullptr;
+	if (inv.isSet(u"application"_s))
+	{
+		program = database.findApplicationProgram(inv.value(u"application"_s));
+	}
+	else if (database.applicationPrograms.size() == 1)
+	{
+		program = &database.applicationPrograms.front();
+	}
+	if (!program)
+	{
+		return fail(u"choose the application program with --application"_s, u"Usage"_s, kExitUsage);
+	}
+	if (program->loadProcedureStyle != u"MergedProcedure")
+	{
+		return fail(u"load procedure style %1 is not supported yet"_s.arg(program->loadProcedureStyle), u"Unsupported"_s,
+			kExitFindings);
+	}
+	const catalog::MaskVersionInfo* mask = database.findMaskVersion(program->maskVersion);
+	const QString subType = inv.value(u"procedure"_s);
+	const catalog::MaskProcedure* procedure = mask ? mask->procedure(u"Load", subType) : nullptr;
+	if (!procedure)
+	{
+		QStringList available;
+		for (const catalog::MaskProcedure& candidate : mask ? mask->procedures : std::vector<catalog::MaskProcedure>{})
+		{
+			available.append(candidate.type + u':' + candidate.subType);
+		}
+		return fail(u"no Load procedure \"%1\" for %2 in the product file's knx_master.xml (masks: %3; procedures: %4)"_s
+						.arg(subType, program->maskVersion)
+						.arg(database.maskVersions.size())
+						.arg(available.join(u", ")),
+			u"NotFound"_s, kExitFindings);
+	}
+
+	download::ResolveInput input;
+	input.procedure = toLdCtrls(procedure->controls);
+	for (const catalog::LoadProcedure& merge : program->loadProcedures)
+	{
+		if (merge.mergeId)
+		{
+			auto& list = input.merges[static_cast<int>(*merge.mergeId)];
+			const auto controls = toLdCtrls(merge.controls);
+			list.insert(list.end(), controls.begin(), controls.end());
+		}
+	}
+	// Images: files named obj<N>... in the --images directory (e.g. "obj4-application@2a18.bin").
+	const QDir dir(inv.value(u"images"_s));
+	const QStringList files = dir.entryList({u"obj*"_s}, QDir::Files, QDir::Name);
+	for (const QString& name : files)
+	{
+		qsizetype digits = 3;
+		while (digits < name.size() && name.at(digits).isDigit())
+		{
+			++digits;
+		}
+		bool ok = false;
+		const uint object = name.mid(3, digits - 3).toUInt(&ok);
+		if (!ok || object > 255)
+		{
+			continue;
+		}
+		QFile file(dir.filePath(name));
+		if (!file.open(QIODevice::ReadOnly))
+		{
+			return fail(u"cannot read %1"_s.arg(file.fileName()), u"IoError"_s, kExitFindings);
+		}
+		const QByteArray content = file.readAll();
+		input.images[static_cast<std::uint8_t>(object)] = Bytes(content.begin(), content.end());
+	}
+	if (input.images.empty())
+	{
+		return fail(u"no obj<N>* image files in %1"_s.arg(dir.path()), u"NotFound"_s, kExitFindings);
+	}
+	// PID_PROGRAM_VERSION: manufacturer, application number, application version.
+	Bytes version;
+	if (inv.isSet(u"program-version"_s))
+	{
+		auto parsed = fromHex(inv.value(u"program-version"_s).toStdString());
+		if (!parsed || parsed->size() != 5)
+		{
+			return fail(u"--program-version needs 5 hex octets"_s, u"Usage"_s, kExitUsage);
+		}
+		version = *parsed;
+	}
+	else
+	{
+		const uint manufacturer = database.manufacturerId.mid(2).toUInt(nullptr, 16);
+		version = {static_cast<std::uint8_t>(manufacturer >> 8), static_cast<std::uint8_t>(manufacturer),
+			static_cast<std::uint8_t>(program->applicationNumber >> 8),
+			static_cast<std::uint8_t>(program->applicationNumber), static_cast<std::uint8_t>(program->applicationVersion)};
+	}
+	input.programVersions[4] = version;
+	auto plan = download::resolve(input);
+	if (!plan)
+	{
+		return fail(qs(plan.error().message), u"InvalidArgument"_s, kExitFindings);
+	}
+	return std::move(*plan);
+}
+
+int deviceDownload(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto device = parseIa(inv, inv.args[0], exitCode);
+	if (!device)
+	{
+		return exitCode;
+	}
+	auto plan = downloadPlan(inv, exitCode);
+	if (!plan)
+	{
+		return exitCode;
+	}
+	QStringList lines;
+	QJsonArray steps;
+	for (std::size_t i = 0; i < plan->steps.size(); ++i)
+	{
+		std::ostringstream os;
+		os << plan->steps[i];
+		lines.append(u"%1  %2"_s.arg(i + 1, 2).arg(qs(os.str())));
+		steps.append(qs(os.str()));
+	}
+	if (inv.isSet(u"dry-run"_s))
+	{
+		return inv.out.success({{u"steps"_s, steps}}, lines.join(u'\n'));
+	}
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.download(*device, *plan,
+				[&, finish](Status status)
+				{
+					if (!status)
+					{
+						finish(inv.out.failure(busExitCode(status.error()), status.error()));
+						return;
+					}
+					finish(inv.out.success({{u"address"_s, qs(device->toString())}, {u"steps"_s, steps}},
+						u"download to %1 completed (%2 steps)"_s.arg(qs(device->toString())).arg(steps.size())));
+				},
+				[&](std::size_t step, std::size_t total, const QString& text)
+				{ inv.out.note(u"  [%1/%2] %3"_s.arg(step + 1).arg(total).arg(text)); });
+		});
+}
+
 } // namespace
 
 std::vector<Command> busCommands()
@@ -802,6 +985,15 @@ std::vector<Command> busCommands()
 	const QCommandLineOption propCount(u"count"_s, u"Number of elements (default 1)."_s, u"n"_s, u"1"_s);
 	const QCommandLineOption propStart(u"start"_s, u"First element index (default 1; 0 reads the element count)."_s,
 		u"i"_s, u"1"_s);
+	const QCommandLineOption knxprod(u"knxprod"_s, u"Product file (.knxprod) of the device."_s, u"file"_s);
+	const QCommandLineOption images(u"images"_s, u"Directory with obj<N>*.bin segment images."_s, u"dir"_s);
+	const QCommandLineOption application(u"application"_s, u"Application program id (when the file has several)."_s,
+		u"id"_s);
+	const QCommandLineOption procedure(u"procedure"_s, u"Load procedure subtype (default ap1)."_s, u"subtype"_s,
+		u"ap1"_s);
+	const QCommandLineOption programVersion(u"program-version"_s,
+		u"PID_PROGRAM_VERSION to write (5 hex octets; default from the application)."_s, u"hex"_s);
+	const QCommandLineOption dryRun(u"dry-run"_s, u"Print the resolved steps and stop (no bus access)."_s);
 	const QCommandLineOption progModeTimeout(u"timeout"_s, u"Seconds to collect answers (default 3)."_s, u"s"_s, u"3"_s);
 	const QCommandLineOption overwrite(u"overwrite"_s, u"Program even if another device already uses the address."_s);
 
@@ -826,6 +1018,9 @@ std::vector<Command> busCommands()
 			u"Read a property value as hex (read-only)."_s, {kInterfaceOption, propCount, propStart}, deviceProperty},
 		{{u"device"_s, u"memory"_s}, {u"ia"_s, u"address"_s, u"length"_s},
 			u"Read device memory as a hex dump (read-only; numbers may be 0x-hex)."_s, {kInterfaceOption}, deviceMemory},
+		{{u"device"_s, u"download"_s}, {u"ia"_s},
+			u"Download segment images with the product file's load procedure (FR-COM-2). Writes to the device!"_s,
+			{kInterfaceOption, knxprod, images, application, procedure, programVersion, dryRun}, deviceDownload},
 		{{u"device"_s, u"progmode"_s}, {},
 			u"List the addresses of the devices in programming mode (read-only; FR-COM-1)."_s,
 			{kInterfaceOption, progModeTimeout}, deviceProgMode},

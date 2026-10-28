@@ -164,6 +164,7 @@ UNIT_TEST(FR_COM_2__memoryControlBlockMatchesRealDevice)
 	ASSERT_EQ(crc16AugCcitt(table), std::uint16_t{0x6760});
 	ASSERT_EQ(memoryControlBlock(table), hex("00 00 00 24 00 ff 67 60"));
 	ASSERT_EQ(allocRelSegmentPayload(AllocRelSegment{4, 1798, 1, 0}), hex("03 0b 00 00 07 06 01 00 00 00"));
+	ASSERT_EQ(loadControlPayload(LoadEvent::Unload), hex("04 00 00 00 00 00 00 00 00 00"));
 }
 
 UNIT_TEST(FR_COM_2__resolverMergesAndSizesSystemBProcedure)
@@ -171,21 +172,22 @@ UNIT_TEST(FR_COM_2__resolverMergesAndSizesSystemBProcedure)
 	auto plan = resolve(testInput());
 	ASSERT(plan.has_value());
 	const auto& steps = plan->steps;
-	ASSERT_EQ(steps.size(), std::size_t{27});
-	ASSERT_EQ(steps[0], Step(Unload{5, true}));
-	ASSERT_EQ(steps[1], Step(Unload{4, false}));
-	ASSERT_EQ(steps[5], Step(Load{4}));
+	ASSERT_EQ(steps.size(), std::size_t{28});
+	ASSERT_EQ(steps[0], Step(Authorize{}));
+	ASSERT_EQ(steps[1], Step(Unload{5, true}));
+	ASSERT_EQ(steps[2], Step(Unload{4, false}));
+	ASSERT_EQ(steps[6], Step(Load{4}));
 	// Merge 2: only the "full" allocation applies.
-	ASSERT_EQ(steps[6], Step(AllocRelSegment{4, 40, 1, 0}));
+	ASSERT_EQ(steps[7], Step(AllocRelSegment{4, 40, 1, 0}));
 	// Table allocations use the image size, not the procedure's placeholder.
-	ASSERT_EQ(steps[8], Step(AllocRelSegment{3, 8, 0, 0}));
-	ASSERT_EQ(steps[10], Step(AllocRelSegment{1, 6, 0, 0}));
-	ASSERT_EQ(steps[12], Step(AllocRelSegment{2, 10, 0, 0}));
-	ASSERT_EQ(std::get<WriteRelMem>(steps[13]).object, std::uint8_t{4});
-	ASSERT_EQ(std::get<WriteRelMem>(steps[13]).data.size(), std::size_t{40});
-	ASSERT_EQ(steps[17], Step(WriteProp{4, 13, hex("ff ff 00 01 21"), true}));
-	ASSERT_EQ(steps[22], Step(LoadImageProp{1, 27}));
-	ASSERT_EQ(steps[26], Step(Restart{}));
+	ASSERT_EQ(steps[9], Step(AllocRelSegment{3, 8, 0, 0}));
+	ASSERT_EQ(steps[11], Step(AllocRelSegment{1, 6, 0, 0}));
+	ASSERT_EQ(steps[13], Step(AllocRelSegment{2, 10, 0, 0}));
+	ASSERT_EQ(std::get<WriteRelMem>(steps[14]).object, std::uint8_t{4});
+	ASSERT_EQ(std::get<WriteRelMem>(steps[14]).data.size(), std::size_t{40});
+	ASSERT_EQ(steps[18], Step(WriteProp{4, 13, hex("ff ff 00 01 21"), true}));
+	ASSERT_EQ(steps[23], Step(LoadImageProp{1, 27}));
+	ASSERT_EQ(steps[27], Step(Restart{}));
 }
 
 UNIT_TEST(FR_COM_2__resolverRejectsUnknownElementsAndMissingImages)
@@ -210,7 +212,7 @@ UNIT_TEST(FR_COM_2__downloadsSystemBApplication)
 	Executor executor(knx::IndividualAddress(kDevice), resolve(input).value());
 	const Status status = h.run(executor);
 	ASSERT(status.has_value());
-	ASSERT_EQ(h.progress.size(), std::size_t{27});
+	ASSERT_EQ(h.progress.size(), std::size_t{28});
 
 	const std::uint16_t segments[] = {0x1002, 0x1804, 0x2806, 0x2A18};
 	for (std::uint8_t object = 1; object <= 4; ++object)
@@ -229,7 +231,7 @@ UNIT_TEST(FR_COM_2__downloadStopsOnUnexpectedLoadState)
 {
 	// LoadCompleted without Load: the device goes to "error"; nothing after that step may run.
 	Harness h;
-	Plan plan{{Unload{4, false}, LoadCompleted{4}, WriteProp{4, 13, hex("01 02 03 04 05"), true}, Restart{}}};
+	Plan plan{{Authorize{}, Unload{4, false}, LoadCompleted{4}, WriteProp{4, 13, hex("01 02 03 04 05"), true}, Restart{}}};
 	Executor executor(knx::IndividualAddress(kDevice), plan);
 	const Status status = h.run(executor);
 	ASSERT(!status.has_value());
@@ -237,18 +239,33 @@ UNIT_TEST(FR_COM_2__downloadStopsOnUnexpectedLoadState)
 	ASSERT(status.error().message.find("error") != std::string::npos);
 	ASSERT_EQ(*h.device.property(4, kPidProgramVersion), Bytes(5, 0x00));
 	ASSERT_EQ(h.device.restartCount(), std::uint32_t{0});
-	ASSERT_EQ(h.progress.size(), std::size_t{2});
+	ASSERT_EQ(h.progress.size(), std::size_t{3});
 }
 
 UNIT_TEST(FR_COM_2__toleratedUnloadFailureContinues)
 {
 	// Object 6 does not exist: the refused unload is mapped to success, as LdCtrlMapError asks.
 	Harness h;
-	Plan plan{{Unload{6, true}, Unload{4, false}}};
+	Plan plan{{Authorize{}, Unload{6, true}, Unload{4, false}}};
 	Executor executor(knx::IndividualAddress(kDevice), plan);
 	ASSERT(h.run(executor).has_value());
-	Plan strict{{Unload{6, false}}};
+	Plan strict{{Authorize{}, Unload{6, false}}};
 	Harness h2;
 	Executor failing(knx::IndividualAddress(kDevice), strict);
 	ASSERT(!h2.run(failing).has_value());
+}
+
+UNIT_TEST(FR_COM_2__systemBWritesNeedAuthorization)
+{
+	// Seen on a real System B actuator: property writes are refused until A_Authorize (default key).
+	Harness h;
+	Executor unauthorized(knx::IndividualAddress(kDevice), Plan{{Unload{4, false}}});
+	const Status status = h.run(unauthorized);
+	ASSERT(!status.has_value());
+	ASSERT(status.error().message.find("refused") != std::string::npos);
+
+	Harness h2;
+	Executor authorized(knx::IndividualAddress(kDevice), Plan{{Authorize{}, Unload{4, false}}});
+	ASSERT(h2.run(authorized).has_value());
+	ASSERT_EQ(authorized.accessLevel(), std::optional<std::uint8_t>(0));
 }

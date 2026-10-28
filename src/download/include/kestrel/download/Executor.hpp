@@ -64,11 +64,14 @@ public:
 
 	bool finished() const { return m_finished; }
 	std::size_t currentStep() const { return m_index; }
+	/// Access level granted by A_Authorize (0 = highest), once authorized.
+	std::optional<std::uint8_t> accessLevel() const { return m_accessLevel; }
 
 private:
 	enum class Wait
 	{
 		None,
+		Authorize,
 		LoadState,
 		TableReference,
 		MemoryWrite,
@@ -103,6 +106,7 @@ private:
 	std::map<std::uint8_t, std::uint32_t> m_tableReferences;
 	/// Segment contents written so far per object (for the memory control block).
 	std::map<std::uint8_t, Bytes> m_written;
+	std::optional<std::uint8_t> m_accessLevel;
 	bool m_started = false;
 	bool m_finished = false;
 };

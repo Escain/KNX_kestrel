@@ -4,6 +4,7 @@
 
 #include "kestrel/app/BusSession.hpp"
 #include "kestrel/bus/UdpTunnelLink.hpp"
+#include "kestrel/download/Executor.hpp"
 #include "kestrel/knx/ManagementSession.hpp"
 
 #include <QObject>
@@ -53,6 +54,9 @@ public:
 	void readDeviceInfo(knx::IndividualAddress device, BusSession::DeviceInfoCallback done);
 	void readManagement(knx::IndividualAddress device, QList<ManagementRead> reads,
 		BusSession::ManagementReadCallback done);
+	void download(knx::IndividualAddress device, download::Plan plan, BusSession::StatusCallback done,
+		BusSession::DownloadProgressCallback progress);
+	void cancelDownload();
 	void readProgrammingMode(std::chrono::milliseconds window, BusSession::AddressListCallback done);
 	void discover(const BusSession::DiscoveryOptions& options, BusSession::DiscoveryCallback done);
 
@@ -120,6 +124,7 @@ private:
 	void finishInfo(InfoOp& op, Result<DeviceInfo> result);
 	void pumpManagementRead(ManagementReadOp& op);
 	void closeDeviceConnections();
+	void pumpDownload();
 	void disconnectWhenDrained();
 	void finishManagementRead(ManagementReadOp& op);
 	void failAll(const Error& error);
@@ -142,6 +147,9 @@ private:
 	std::vector<ProgModeScan> m_scans;
 	std::vector<std::unique_ptr<ManagementReadOp>> m_mgmtReads;
 	std::optional<knx::TimePoint> m_disconnectDeadline;
+	std::unique_ptr<download::Executor> m_download;
+	BusSession::StatusCallback m_downloadDone;
+	BusSession::DownloadProgressCallback m_downloadProgress;
 };
 
 } // namespace kestrel::app::detail

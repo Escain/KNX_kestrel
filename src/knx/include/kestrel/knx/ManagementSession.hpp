@@ -105,6 +105,8 @@ public:
 	RequestId propertyValueWrite(std::uint8_t objectIndex, std::uint8_t propertyId, std::uint8_t count,
 		std::uint16_t startIndex, ByteView data, TimePoint now);
 	RequestId restart(TimePoint now);
+	/// A_Authorize_Request; Completed data: the granted access level (1 octet, 0 = highest).
+	RequestId authorize(std::uint32_t key, TimePoint now);
 	/// Cancels queued requests (Failed/Cancelled) and disconnects.
 	void close(TimePoint now);
 
@@ -124,6 +126,7 @@ private:
 		MemoryWrite,
 		PropertyValueRead,
 		PropertyValueWrite,
+		Authorize,
 		Restart,
 	};
 
@@ -139,6 +142,7 @@ private:
 		std::uint8_t propertyId = 0;
 		std::uint8_t count = 0;
 		std::uint16_t startIndex = 0;
+		std::uint32_t key = 0;
 		std::size_t offset = 0;
 		Bytes result;
 	};

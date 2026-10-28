@@ -6,5 +6,5 @@ kestrel_add_library(app
 		src/BusWorker.cpp
 		src/BusWorker.hpp
 		src/TelegramRecord.cpp
-	PUBLIC_DEPS kestrel::bus kestrel::dpt Qt6::Core Qt6::Network
+	PUBLIC_DEPS kestrel::bus kestrel::dpt kestrel::download Qt6::Core Qt6::Network
 )

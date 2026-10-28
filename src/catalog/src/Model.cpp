@@ -378,6 +378,18 @@ std::ostream& operator<<(std::ostream& os, const LoadProcedure& value)
 	return os << "]}";
 }
 
+const MaskProcedure* MaskVersionInfo::procedure(QStringView type, QStringView subType) const
+{
+	for (const MaskProcedure& candidate : procedures)
+	{
+		if (candidate.type == type && candidate.subType == subType)
+		{
+			return &candidate;
+		}
+	}
+	return nullptr;
+}
+
 // --- dynamic -----------------------------------------------------------------------------------------------
 
 const char* toString(DynamicKind kind)
@@ -601,6 +613,11 @@ std::ostream& operator<<(std::ostream& os, const ApplicationProgram& value)
 const Hardware* ProductDatabase::findHardware(QStringView id) const
 {
 	return findById(hardware, id);
+}
+
+const MaskVersionInfo* ProductDatabase::findMaskVersion(QStringView id) const
+{
+	return findById(maskVersions, id);
 }
 
 const Product* ProductDatabase::findProduct(QStringView id) const

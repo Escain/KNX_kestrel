@@ -18,6 +18,7 @@
 #include "kestrel/app/TelegramRecord.hpp"
 #include "kestrel/base/Result.hpp"
 #include "kestrel/bus/Discovery.hpp"
+#include "kestrel/download/Plan.hpp"
 #include "kestrel/dpt/Dpt.hpp"
 #include "kestrel/knx/Address.hpp"
 #include "kestrel/knx/BusLink.hpp"
@@ -119,6 +120,8 @@ public:
 	using AddressListCallback = std::function<void(Result<QList<knx::IndividualAddress>>)>;
 	/// One result per request, in order; the outer error is only "not connected".
 	using ManagementReadCallback = std::function<void(Result<QList<Result<QByteArray>>>)>;
+	/// Download progress: about to run step `step` (0-based) of `total`.
+	using DownloadProgressCallback = std::function<void(std::size_t step, std::size_t total, QString text)>;
 
 	struct ProgramOptions
 	{
@@ -178,6 +181,11 @@ public:
 	/// Read-only: runs `reads` in order over one transport connection to `device`. Each read succeeds or
 	/// fails on its own (a refused property does not stop the rest); a lost connection fails the remainder.
 	void readManagement(knx::IndividualAddress device, QList<ManagementRead> reads, ManagementReadCallback done);
+	/// FR-COM-2: runs a resolved load procedure (download::Plan) against `device`. Errors: Conflict (a download
+	/// is already running), IoError (not connected / connection lost), Cancelled, or the failing step.
+	void download(knx::IndividualAddress device, download::Plan plan, StatusCallback done,
+		DownloadProgressCallback progress = {});
+	void cancelDownload();
 	void readProgrammingMode(AddressListCallback done, std::chrono::milliseconds window = std::chrono::milliseconds(3000));
 
 	// --- Discovery (FR-BUS-1) ---------------------------------------------------------------------------------

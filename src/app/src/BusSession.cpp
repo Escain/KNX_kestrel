@@ -89,6 +89,18 @@ void BusSession::readManagement(knx::IndividualAddress device, QList<ManagementR
 		{ w.readManagement(device, std::move(reads), std::move(done)); });
 }
 
+void BusSession::download(
+	knx::IndividualAddress device, download::Plan plan, StatusCallback done, DownloadProgressCallback progress)
+{
+	post([device, plan = std::move(plan), done = std::move(done), progress = std::move(progress)](
+			 detail::BusWorker& w) mutable { w.download(device, std::move(plan), std::move(done), std::move(progress)); });
+}
+
+void BusSession::cancelDownload()
+{
+	post([](detail::BusWorker& w) { w.cancelDownload(); });
+}
+
 void BusSession::readProgrammingMode(AddressListCallback done, std::chrono::milliseconds window)
 {
 	post([window, done = std::move(done)](detail::BusWorker& w) mutable { w.readProgrammingMode(window, std::move(done)); });

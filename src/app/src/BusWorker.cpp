@@ -108,6 +108,11 @@ void BusWorker::connectTo(const QString& host, quint16 port, BusSession::StatusC
 
 void BusWorker::closeDeviceConnections()
 {
+	if (m_download)
+	{
+		m_download->cancel(knx::Clock::now());
+		pumpDownload();
+	}
 	for (auto& op : m_infos)
 	{
 		if (!op->finished)
@@ -236,6 +241,12 @@ void BusWorker::failAll(const Error& error)
 			deliver(op->done, Result<QList<Result<QByteArray>>>(Unexpected{error}));
 		}
 	}
+	if (m_download)
+	{
+		m_download.reset();
+		deliver(std::exchange(m_downloadDone, {}), Status(Unexpected{error}));
+		m_downloadProgress = {};
+	}
 }
 
 // --- Frames ------------------------------------------------------------------------------------------------
@@ -320,6 +331,11 @@ void BusWorker::onLinkFrame(const knx::cemi::LData& frame)
 		}
 	}
 
+	if (m_download)
+	{
+		m_download->onFrame(frame, now);
+		pumpDownload();
+	}
 	if (m_programmer)
 	{
 		m_programmer->onFrame(frame, now);
@@ -677,6 +693,72 @@ void BusWorker::pumpInfo(InfoOp& op)
 	}
 }
 
+// --- Download ----------------------------------------------------------------------------------------------
+
+void BusWorker::download(knx::IndividualAddress device, download::Plan plan, BusSession::StatusCallback done,
+	BusSession::DownloadProgressCallback progress)
+{
+	if (m_link->state() != knx::LinkState::Connected)
+	{
+		deliver(done, Status(notConnected()));
+		return;
+	}
+	if (m_download)
+	{
+		deliver(done, Status(makeError(ErrorCode::Conflict, "a download is already running")));
+		return;
+	}
+	m_download = std::make_unique<download::Executor>(device, std::move(plan));
+	m_download->setLocalAddress(m_link->address());
+	m_downloadDone = std::move(done);
+	m_downloadProgress = std::move(progress);
+	ensureTimer();
+	m_download->start(knx::Clock::now());
+	pumpDownload();
+}
+
+void BusWorker::cancelDownload()
+{
+	if (m_download)
+	{
+		m_download->cancel(knx::Clock::now());
+		pumpDownload();
+	}
+}
+
+void BusWorker::pumpDownload()
+{
+	if (!m_download)
+	{
+		return;
+	}
+	for (auto& action : m_download->takeActions())
+	{
+		if (auto* send = std::get_if<download::Executor::SendFrame>(&action))
+		{
+			(void)sendFrame(send->frame);
+		}
+		else if (auto* progress = std::get_if<download::Executor::Progress>(&action))
+		{
+			if (m_downloadProgress)
+			{
+				toSession([callback = m_downloadProgress, step = progress->step, total = progress->total,
+							  text = QString::fromStdString(progress->text)] { callback(step, total, text); });
+			}
+		}
+		else
+		{
+			// Keep the executor until its closing frames were handed to the link (they are, above, in order).
+			deliver(std::exchange(m_downloadDone, {}), std::get<download::Executor::Finished>(action).status);
+			m_downloadProgress = {};
+		}
+	}
+	if (m_download->finished() && !m_downloadDone)
+	{
+		m_download.reset();
+	}
+}
+
 // --- Generic management reads ------------------------------------------------------------------------------
 
 void BusWorker::readManagement(knx::IndividualAddress device, QList<ManagementRead> reads,
@@ -825,6 +907,11 @@ void BusWorker::onTick()
 		{
 			++it;
 		}
+	}
+	if (m_download)
+	{
+		m_download->tick(now);
+		pumpDownload();
 	}
 	if (m_programmer)
 	{

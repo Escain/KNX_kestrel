@@ -335,6 +335,18 @@ Apdu restart()
 	return makeApdu(Apci::Restart);
 }
 
+Apdu authorizeRequest(std::uint32_t key)
+{
+	return makeApdu(Apci::AuthorizeRequest, 0,
+		Bytes{0x00, static_cast<std::uint8_t>(key >> 24), static_cast<std::uint8_t>(key >> 16),
+			static_cast<std::uint8_t>(key >> 8), static_cast<std::uint8_t>(key)});
+}
+
+Apdu authorizeResponse(std::uint8_t level)
+{
+	return makeApdu(Apci::AuthorizeResponse, 0, Bytes{level});
+}
+
 std::ostream& operator<<(std::ostream& os, const MemoryAccess& access)
 {
 	return os << "Memory{0x" << std::hex << access.address << std::dec << " n=" << static_cast<unsigned>(access.count)

@@ -6,6 +6,7 @@
 
 #include <QFile>
 #include <QSet>
+#include <QXmlStreamReader>
 
 namespace kestrel::catalog
 {
@@ -162,6 +163,85 @@ std::ostream& operator<<(std::ostream& os, const LoadedDatabase& value)
 	return os << "]}";
 }
 
+namespace
+{
+
+LoadControl readLoadControl(QXmlStreamReader& xml)
+{
+	LoadControl control;
+	control.element = xml.name().toString();
+	for (const QXmlStreamAttribute& attribute : xml.attributes())
+	{
+		control.attributes[attribute.name().toString()] = attribute.value().toString();
+	}
+	while (xml.readNextStartElement())
+	{
+		control.children.push_back(readLoadControl(xml));
+	}
+	return control;
+}
+
+/// knx_master.xml: MasterData/MaskVersions/MaskVersion with their Procedures (below HawkConfigurationData).
+/// Everything else is skipped.
+Result<std::vector<MaskVersionInfo>> parseMasterData(const QByteArray& content)
+{
+	std::vector<MaskVersionInfo> masks;
+	QXmlStreamReader xml(content);
+	while (!xml.atEnd())
+	{
+		xml.readNext();
+		if (!xml.isStartElement() || xml.name() != u"MaskVersion")
+		{
+			continue;
+		}
+		MaskVersionInfo mask;
+		const auto attributes = xml.attributes();
+		mask.id = attributes.value(u"Id").toString();
+		mask.maskVersion = attributes.value(u"MaskVersion").toUInt();
+		mask.name = attributes.value(u"Name").toString();
+		mask.managementModel = attributes.value(u"ManagementModel").toString();
+		// Procedures sit below HawkConfigurationData; accept them at any depth inside the MaskVersion.
+		int depth = 1;
+		while (depth > 0 && !xml.atEnd())
+		{
+			xml.readNext();
+			if (xml.isEndElement())
+			{
+				--depth;
+				continue;
+			}
+			if (!xml.isStartElement())
+			{
+				continue;
+			}
+			if (xml.name() != u"Procedure")
+			{
+				++depth;
+				continue;
+			}
+			MaskProcedure procedure;
+			const auto procedureAttributes = xml.attributes();
+			procedure.type = procedureAttributes.value(u"ProcedureType").toString();
+			procedure.subType = procedureAttributes.value(u"ProcedureSubType").toString();
+			procedure.access = procedureAttributes.value(u"Access").toString();
+			while (xml.readNextStartElement())
+			{
+				procedure.controls.push_back(readLoadControl(xml));
+			}
+			mask.procedures.push_back(std::move(procedure));
+		}
+		masks.push_back(std::move(mask));
+	}
+	if (xml.hasError())
+	{
+		return makeError(ErrorCode::ParseError,
+			u"knx_master.xml line %1: %2"_s.arg(xml.lineNumber()).arg(xml.errorString()).toStdString());
+	}
+	return masks;
+}
+
+} // namespace
+
 Result<LoadedDatabase> parsePackage(const PackageFiles& files)
 {
 	std::vector<QString> ordered[4]; // Hardware, Catalog, Program, Other
@@ -185,6 +265,21 @@ Result<LoadedDatabase> parsePackage(const PackageFiles& files)
 
 	detail::ParseState state;
 	state.database.hasMasterData = masterData;
+	for (const auto& [path, content] : files)
+	{
+		if (roleOf(path) == FileRole::MasterData && !content.isEmpty())
+		{
+			auto masks = parseMasterData(content);
+			if (masks)
+			{
+				state.database.maskVersions = std::move(*masks);
+			}
+			else
+			{
+				state.warnings.push_back({path, 0, QString::fromStdString(masks.error().message)});
+			}
+		}
+	}
 	for (int role = 0; role < 4; ++role)
 	{
 		for (const QString& path : ordered[role])
@@ -235,7 +330,6 @@ Result<LoadedDatabase> loadKnxprod(Bytes data)
 		switch (roleOf(path))
 		{
 			case FileRole::Ignored: continue;
-			case FileRole::MasterData: files[path] = QByteArray(); continue; // presence only, not parsed yet
 			default: break;
 		}
 		KESTREL_TRY(const Bytes content, zip.read(entry));

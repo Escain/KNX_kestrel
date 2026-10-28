@@ -32,3 +32,14 @@
 - [ ] Validation against real vendor files through `KESTREL_PRIVATE_CORPUS` (MEAN WELL M-0162 actuator, push button).
 - [ ] ZIP writer (byte-deterministic), `.kestrel` ZIP container; user catalog (SQLite); `DynamicEvaluator`;
       instantiating a product into the topology; parameter editor; `.knxproj` import; autosave.
+
+## M3/M4 progress (2026-10-28)
+- [x] `download` library: Plan, Resolver (mask procedure + MergedProcedure merges + images), sans-IO Executor
+      (authorize, load-state checks, verified memory writes, PID 27 memory control blocks).
+- [x] knx_master.xml mask procedures parsed by `catalog`; `kestrel-cli device download` (with `--dry-run`).
+- [x] Simulator: System B load state machines, relative allocation, authorization.
+- [x] Real hardware: MEAN WELL KAA-8R reloaded with its ETS6 images; channel F switches (specs/04 field notes).
+- [ ] Generate the images from the product file and a project: parameter image (DynamicEvaluator for
+      choose/when), group object table, address and association tables. Acceptance test: the bytes are
+      identical to the ETS6 images.
+- [ ] Push-button sensor: catalog, links to 1/0/6 and 2/0/6, download.

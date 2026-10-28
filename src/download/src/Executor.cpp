@@ -72,7 +72,12 @@ void Executor::runStep(knx::TimePoint now)
 	const Step& step = m_plan.steps[m_index];
 	m_actions.push_back(Progress{m_index, m_plan.steps.size(), describe(step)});
 
-	if (const auto* unload = std::get_if<Unload>(&step))
+	if (const auto* authorize = std::get_if<Authorize>(&step))
+	{
+		m_wait = Wait::Authorize;
+		m_pending = m_session.authorize(authorize->key, now);
+	}
+	else if (const auto* unload = std::get_if<Unload>(&step))
 	{
 		writeLoadControl(unload->lsm, loadControlPayload(LoadEvent::Unload), now);
 	}
@@ -292,6 +297,15 @@ void Executor::onCompleted(Bytes data, knx::TimePoint now)
 		}
 		advance(now);
 		return;
+	case Wait::Authorize:
+		if (data.size() != 1)
+		{
+			fail(Error{ErrorCode::ProtocolError, stepError("invalid authorize response")}, now);
+			return;
+		}
+		m_accessLevel = data.front();
+		advance(now);
+		return;
 	case Wait::Restart:
 		advance(now);
 		return;
@@ -340,7 +354,12 @@ void Executor::pump(knx::TimePoint now)
 				}
 				else
 				{
-					fail(Error{failed->error.code, stepError(failed->error.message)}, now);
+					std::string message = failed->error.message;
+					if (m_accessLevel && message.find("refused") != std::string::npos)
+					{
+						message += " (access level " + std::to_string(*m_accessLevel) + ")";
+					}
+					fail(Error{failed->error.code, stepError(message)}, now);
 				}
 			}
 			else if (std::holds_alternative<knx::ManagementSession::Disconnected>(action))
