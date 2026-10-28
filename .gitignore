@@ -1,0 +1,23 @@
+# Proprietary reference material — never commit
+Ets6Setup.exe
+*.knxproj
+*.knxprod
+knx_master*.xml
+
+# Build
+/build*/
+/out/
+CMakeUserPresets.json
+*.user
+compile_commands.json
+
+# Python / Robot
+__pycache__/
+*.pyc
+/results/
+output.xml
+log.html
+report.html
+
+# Editor / clangd index
+.cache/

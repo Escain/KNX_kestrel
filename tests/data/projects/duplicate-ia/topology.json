@@ -1,0 +1,22 @@
+{
+  "areas": [
+    {
+      "id": "area-01qjrp763z6wf",
+      "lines": [
+        {
+          "devices": [
+            "dev-91fpnx4yzeqgw",
+            "dev-djrwx449k643d"
+          ],
+          "id": "line-6fm1npkdbpkse",
+          "medium": "TP",
+          "name": "Line",
+          "number": 1
+        }
+      ],
+      "medium": "TP",
+      "name": "Area",
+      "number": 1
+    }
+  ]
+}

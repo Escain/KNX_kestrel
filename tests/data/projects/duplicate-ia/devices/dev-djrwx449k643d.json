@@ -1,0 +1,16 @@
+{
+  "appProgramRef": "",
+  "comObjects": [],
+  "description": "",
+  "id": "dev-djrwx449k643d",
+  "name": "Dimmer B",
+  "number": 1,
+  "params": {},
+  "place": null,
+  "productRef": "",
+  "state": {
+    "downloadedHash": "",
+    "iaProgrammed": false,
+    "serial": ""
+  }
+}

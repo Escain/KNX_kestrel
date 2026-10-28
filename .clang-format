@@ -1,0 +1,16 @@
+# Mirrors the style of third_party/escain_unittests/UnitTests.hpp
+BasedOnStyle: LLVM
+UseTab: ForIndentation
+IndentWidth: 4
+TabWidth: 4
+ColumnLimit: 120
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: true
+NamespaceIndentation: None
+AccessModifierOffset: -4
+IndentCaseLabels: true
+PointerAlignment: Left
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive

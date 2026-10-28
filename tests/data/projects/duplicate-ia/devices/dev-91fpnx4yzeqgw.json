@@ -1,0 +1,16 @@
+{
+  "appProgramRef": "",
+  "comObjects": [],
+  "description": "",
+  "id": "dev-91fpnx4yzeqgw",
+  "name": "Dimmer A",
+  "number": 1,
+  "params": {},
+  "place": null,
+  "productRef": "",
+  "state": {
+    "downloadedHash": "",
+    "iaProgrammed": false,
+    "serial": ""
+  }
+}

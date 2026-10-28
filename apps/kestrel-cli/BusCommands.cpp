@@ -1,0 +1,573 @@
+// Bus commands: each invocation runs an event loop around one app::BusSession (bus thread inside).
+
+#include "Cli.hpp"
+
+#include "kestrel/app/BusSession.hpp"
+#include "kestrel/base/Bytes.hpp"
+#include "kestrel/dpt/Dpt.hpp"
+#include "kestrel/knx/Address.hpp"
+
+#include <QEventLoop>
+#include <QJsonArray>
+#include <QJsonValue>
+#include <QTimer>
+
+#include <cmath>
+#include <map>
+#include <optional>
+#include <sstream>
+
+namespace kestrel::cli
+{
+
+using namespace Qt::StringLiterals;
+
+namespace
+{
+
+const QCommandLineOption kInterfaceOption(u"interface"_s, u"KNXnet/IP interface host[:port] (port 3671 by default)."_s,
+	u"host:port"_s);
+
+struct Endpoint
+{
+	QString host;
+	quint16 port = 3671;
+};
+
+std::optional<Endpoint> parseEndpoint(const QString& text)
+{
+	Endpoint endpoint;
+	const qsizetype colon = text.lastIndexOf(u':');
+	endpoint.host = colon < 0 ? text : text.left(colon);
+	if (colon >= 0)
+	{
+		bool ok = false;
+		const uint port = text.mid(colon + 1).toUInt(&ok);
+		if (!ok || port == 0 || port > 0xFFFF)
+		{
+			return std::nullopt;
+		}
+		endpoint.port = static_cast<quint16>(port);
+	}
+	if (endpoint.host.isEmpty())
+	{
+		return std::nullopt;
+	}
+	return endpoint;
+}
+
+/// Seconds option → milliseconds; nullopt when malformed or negative.
+std::optional<std::chrono::milliseconds> parseSeconds(const QString& text)
+{
+	bool ok = false;
+	const double seconds = text.toDouble(&ok);
+	if (!ok || seconds < 0 || !std::isfinite(seconds))
+	{
+		return std::nullopt;
+	}
+	return std::chrono::milliseconds(static_cast<std::int64_t>(std::llround(seconds * 1000.0)));
+}
+
+QString qs(const std::string& text)
+{
+	return QString::fromStdString(text);
+}
+
+QJsonValue toJsonValue(const dpt::DptValue& value)
+{
+	return std::visit(
+		[](const auto& v) -> QJsonValue
+		{
+			using T = std::decay_t<decltype(v)>;
+			if constexpr (std::is_same_v<T, bool>)
+			{
+				return v;
+			}
+			else if constexpr (std::is_same_v<T, std::int64_t>)
+			{
+				return static_cast<qint64>(v);
+			}
+			else if constexpr (std::is_same_v<T, std::uint64_t>)
+			{
+				return static_cast<qint64>(v);
+			}
+			else if constexpr (std::is_same_v<T, double>)
+			{
+				return v;
+			}
+			else
+			{
+				return QString::fromStdString(v);
+			}
+		},
+		value);
+}
+
+QString hex(const QByteArray& bytes)
+{
+	return QString::fromLatin1(bytes.toHex(' '));
+}
+
+/// Runs `body` with a connected session; `body` calls finish(exitCode) exactly once.
+int withSession(Invocation& inv, const std::function<void(app::BusSession&, const std::function<void(int)>&)>& body,
+	std::optional<std::chrono::milliseconds> overallTimeout = std::nullopt)
+{
+	if (!inv.isSet(kInterfaceOption.names().first()))
+	{
+		return inv.out.failure(kExitUsage, u"--interface host:port is required"_s, u"Usage"_s);
+	}
+	const auto endpoint = parseEndpoint(inv.value(kInterfaceOption.names().first()));
+	if (!endpoint)
+	{
+		return inv.out.failure(kExitUsage, u"invalid --interface (expected host[:port])"_s, u"Usage"_s);
+	}
+
+	QEventLoop loop;
+	int exitCode = kExitOk;
+	bool finished = false;
+	const auto finish = [&](int code)
+	{
+		if (!finished)
+		{
+			finished = true;
+			exitCode = code;
+			loop.quit();
+		}
+	};
+
+	app::BusSession session;
+	QObject::connect(&session, &app::BusSession::connectionLost, &loop,
+		[&](const QString& reason)
+		{
+			if (session.state() == knx::LinkState::Disconnected && !finished)
+			{
+				finish(inv.out.failure(kExitBus, u"connection lost: "_s + reason, u"IoError"_s));
+			}
+		});
+	session.connectToInterface(endpoint->host, endpoint->port,
+		[&](Status status)
+		{
+			if (!status)
+			{
+				finish(inv.out.failure(kExitBus, status.error()));
+				return;
+			}
+			inv.out.note(u"connected to %1:%2 as %3"_s.arg(endpoint->host)
+					.arg(endpoint->port)
+					.arg(qs(session.localAddress().toString())));
+			body(session, finish);
+		});
+	QTimer timeout;
+	if (overallTimeout && overallTimeout->count() > 0)
+	{
+		timeout.setSingleShot(true);
+		QObject::connect(&timeout, &QTimer::timeout, &loop,
+			[&] { finish(inv.out.failure(kExitBus, u"timed out"_s, u"Timeout"_s)); });
+		timeout.start(*overallTimeout);
+	}
+	if (!finished)
+	{
+		loop.exec();
+	}
+	session.disconnectFromInterface();
+	return exitCode;
+}
+
+struct GroupTarget
+{
+	knx::GroupAddress address;
+	dpt::DptId dpt;
+};
+
+std::optional<GroupTarget> parseGroupTarget(Invocation& inv, int& exitCode)
+{
+	auto ga = knx::GroupAddress::parse(inv.args[0].toStdString());
+	if (!ga)
+	{
+		exitCode = inv.out.failure(kExitUsage, u"invalid group address '%1'"_s.arg(inv.args[0]), u"Usage"_s);
+		return std::nullopt;
+	}
+	auto id = dpt::DptId::parse(inv.args[1].toStdString());
+	if (!id || dpt::sizeInBit(*id) == 0)
+	{
+		exitCode = inv.out.failure(kExitUsage, u"unknown datapoint type '%1'"_s.arg(inv.args[1]), u"Usage"_s);
+		return std::nullopt;
+	}
+	return GroupTarget{*ga, *id};
+}
+
+// --- bus discover ------------------------------------------------------------------------------------------
+
+int busDiscover(Invocation& inv)
+{
+	app::BusSession::DiscoveryOptions options;
+	const auto timeout = parseSeconds(inv.value(u"timeout"_s));
+	if (!timeout)
+	{
+		return inv.out.failure(kExitUsage, u"invalid --timeout"_s, u"Usage"_s);
+	}
+	options.timeout = *timeout;
+	options.unicastHost = inv.value(u"host"_s);
+	bool portOk = false;
+	const uint port = inv.value(u"port"_s).toUInt(&portOk);
+	if (!portOk || port == 0 || port > 0xFFFF)
+	{
+		return inv.out.failure(kExitUsage, u"invalid --port"_s, u"Usage"_s);
+	}
+	options.unicastPort = static_cast<quint16>(port);
+	// With an explicit host only that host is asked, unless --multicast is given as well.
+	options.multicast = options.unicastHost.isEmpty() || inv.isSet(u"multicast"_s);
+
+	QEventLoop loop;
+	int exitCode = kExitOk;
+	app::BusSession session;
+	session.discover(options,
+		[&](Result<QList<bus::DiscoveredInterface>> result)
+		{
+			if (!result)
+			{
+				exitCode = inv.out.failure(kExitBus, result.error());
+				loop.quit();
+				return;
+			}
+			QJsonArray list;
+			QString text;
+			for (const bus::DiscoveredInterface& found : *result)
+			{
+				const QString endpoint = u"%1:%2"_s.arg(found.host.toString()).arg(found.port);
+				list.append(QJsonObject{
+					{u"host"_s, found.host.toString()},
+					{u"port"_s, found.port},
+					{u"name"_s, found.friendlyName()},
+					{u"address"_s, qs(found.info.address.toString())},
+					{u"serial"_s, qs(found.info.serial.toString())},
+					{u"programmingMode"_s, found.info.programmingMode},
+					{u"tunnelling"_s, found.supportsTunnelling()},
+					{u"routing"_s, found.supportsRouting()},
+				});
+				text += u"%1  %2  %3  %4%5\n"_s.arg(endpoint, qs(found.info.address.toString()), found.friendlyName(),
+					found.supportsTunnelling() ? u"tunnelling"_s : u""_s,
+					found.supportsRouting() ? u" routing"_s : u""_s);
+			}
+			if (result->isEmpty())
+			{
+				text = u"no KNXnet/IP interface found"_s;
+			}
+			exitCode = inv.out.success({{u"interfaces"_s, list}}, text.trimmed());
+			loop.quit();
+		});
+	loop.exec();
+	return exitCode;
+}
+
+// --- group write / read ------------------------------------------------------------------------------------
+
+int groupWrite(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto target = parseGroupTarget(inv, exitCode);
+	if (!target)
+	{
+		return exitCode;
+	}
+	auto value = dpt::parse(target->dpt, inv.args[2].toStdString());
+	if (!value)
+	{
+		return inv.out.failure(kExitUsage, u"invalid value '%1' for DPT %2: %3"_s.arg(inv.args[2],
+											   qs(target->dpt.toString()), qs(value.error().message)),
+			u"Usage"_s);
+	}
+	auto encoded = dpt::encode(target->dpt, *value);
+	if (!encoded)
+	{
+		return inv.out.failure(kExitUsage, encoded.error());
+	}
+	const QString formatted = qs(dpt::format(target->dpt, *value));
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.groupWrite(target->address, target->dpt, *value,
+				[&, finish](Status status)
+				{
+					if (!status)
+					{
+						finish(inv.out.failure(busExitCode(status.error()), status.error()));
+						return;
+					}
+					finish(inv.out.success(
+						{
+							{u"ga"_s, qs(target->address.toString())},
+							{u"dpt"_s, qs(target->dpt.toString())},
+							{u"value"_s, toJsonValue(*value)},
+							{u"text"_s, formatted},
+							{u"raw"_s, qs(toHex(*encoded))},
+						},
+						u"%1 <- %2"_s.arg(qs(target->address.toString()), formatted)));
+				});
+		});
+}
+
+int groupRead(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto target = parseGroupTarget(inv, exitCode);
+	if (!target)
+	{
+		return exitCode;
+	}
+	const auto timeout = parseSeconds(inv.value(u"timeout"_s));
+	if (!timeout)
+	{
+		return inv.out.failure(kExitUsage, u"invalid --timeout"_s, u"Usage"_s);
+	}
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.groupRead(
+				target->address, target->dpt,
+				[&, finish](Result<app::GroupReadResult> result)
+				{
+					if (!result)
+					{
+						finish(inv.out.failure(busExitCode(result.error()), result.error()));
+						return;
+					}
+					finish(inv.out.success(
+						{
+							{u"ga"_s, qs(target->address.toString())},
+							{u"dpt"_s, qs(target->dpt.toString())},
+							{u"source"_s, qs(result->responder.toString())},
+							{u"value"_s, toJsonValue(result->value)},
+							{u"text"_s, result->text},
+							{u"raw"_s, hex(result->raw)},
+						},
+						u"%1 = %2 (from %3)"_s.arg(qs(target->address.toString()), result->text,
+							qs(result->responder.toString()))));
+				},
+				*timeout);
+		});
+}
+
+// --- monitor -----------------------------------------------------------------------------------------------
+
+QJsonObject toJson(const app::TelegramRecord& record)
+{
+	QJsonObject object{
+		{u"event"_s, u"telegram"_s},
+		{u"time"_s, record.timestamp.toString(Qt::ISODateWithMs)},
+		{u"source"_s, qs(record.source.toString())},
+		{u"destination"_s, record.destinationText()},
+		{u"group"_s, record.isGroup},
+		{u"service"_s, record.serviceText()},
+		{u"data"_s, hex(record.payload)},
+	};
+	if (!record.decoded.isEmpty())
+	{
+		object.insert(u"value"_s, record.decoded);
+	}
+	if (record.outgoing)
+	{
+		object.insert(u"outgoing"_s, true);
+	}
+	return object;
+}
+
+QString toText(const app::TelegramRecord& record)
+{
+	QString text = u"%1  %2 -> %3  %4  %5"_s.arg(record.timestamp.toLocalTime().toString(u"HH:mm:ss.zzz"_s),
+		qs(record.source.toString()), record.destinationText(), record.serviceText(), hex(record.payload));
+	if (!record.decoded.isEmpty())
+	{
+		text += u"  ("_s + record.decoded + u')';
+	}
+	return text;
+}
+
+int monitor(Invocation& inv)
+{
+	bool countOk = false;
+	const int count = inv.value(u"count"_s).toInt(&countOk);
+	if (!countOk || count < 0)
+	{
+		return inv.out.failure(kExitUsage, u"invalid --count"_s, u"Usage"_s);
+	}
+	const auto timeout = parseSeconds(inv.value(u"timeout"_s));
+	if (!timeout)
+	{
+		return inv.out.failure(kExitUsage, u"invalid --timeout"_s, u"Usage"_s);
+	}
+	std::map<std::uint16_t, dpt::DptId> dpts;
+	for (const QString& entry : inv.parser.values(u"dpt"_s))
+	{
+		const auto parts = entry.split(u'=');
+		auto ga = parts.size() == 2 ? knx::GroupAddress::parse(parts[0].toStdString())
+		                            : Result<knx::GroupAddress>(makeError(ErrorCode::InvalidArgument, ""));
+		auto id = parts.size() == 2 ? dpt::DptId::parse(parts[1].toStdString())
+		                            : Result<dpt::DptId>(makeError(ErrorCode::InvalidArgument, ""));
+		if (!ga || !id)
+		{
+			return inv.out.failure(kExitUsage, u"invalid --dpt '%1' (expected ga=dpt, e.g. 1/1/2=9.001)"_s.arg(entry),
+				u"Usage"_s);
+		}
+		dpts[ga->raw()] = *id;
+	}
+
+	int received = 0;
+	return withSession(
+		inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			for (const auto& [raw, id] : dpts)
+			{
+				session.setGroupAddressDpt(knx::GroupAddress(raw), id);
+			}
+			inv.out.stream({{u"event"_s, u"connected"_s}, {u"address"_s, qs(session.localAddress().toString())}},
+				u"monitoring (Ctrl+C to stop)"_s);
+			QObject::connect(&session, &app::BusSession::telegramsAvailable, &session,
+				[&, finish]
+				{
+					for (const app::TelegramRecord& record : session.takeTelegrams())
+					{
+						if (count > 0 && received >= count)
+						{
+							break;
+						}
+						inv.out.stream(toJson(record), toText(record));
+						++received;
+					}
+					if (count > 0 && received >= count)
+					{
+						finish(kExitOk);
+					}
+				});
+		},
+		*timeout);
+}
+
+// --- device ------------------------------------------------------------------------------------------------
+
+std::optional<knx::IndividualAddress> parseIa(Invocation& inv, const QString& text, int& exitCode)
+{
+	auto ia = knx::IndividualAddress::parse(text.toStdString());
+	if (!ia)
+	{
+		exitCode = inv.out.failure(kExitUsage, u"invalid individual address '%1'"_s.arg(text), u"Usage"_s);
+		return std::nullopt;
+	}
+	return *ia;
+}
+
+QString stateText(knx::IaProgrammerState state)
+{
+	std::ostringstream os;
+	os << state;
+	return qs(os.str());
+}
+
+int programIa(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto target = parseIa(inv, inv.args[0], exitCode);
+	if (!target)
+	{
+		return exitCode;
+	}
+	const auto timeout = parseSeconds(inv.value(u"timeout"_s));
+	if (!timeout)
+	{
+		return inv.out.failure(kExitUsage, u"invalid --timeout"_s, u"Usage"_s);
+	}
+	app::BusSession::ProgramOptions options;
+	options.timeout = *timeout;
+	options.allowOverwrite = inv.isSet(u"overwrite"_s);
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			inv.out.note(u"press the programming button of the device..."_s);
+			session.programIndividualAddress(
+				*target, options,
+				[&, finish](Result<knx::IndividualAddress> result)
+				{
+					if (!result)
+					{
+						finish(inv.out.failure(busExitCode(result.error()), result.error()));
+						return;
+					}
+					finish(inv.out.success(
+						{{u"address"_s, qs(target->toString())}, {u"previousAddress"_s, qs(result->toString())}},
+						u"programmed %1 (was %2)"_s.arg(qs(target->toString()), qs(result->toString()))));
+				},
+				[&](knx::IaProgrammerState state) { inv.out.note(u"  "_s + stateText(state)); });
+		});
+}
+
+int deviceInfo(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto device = parseIa(inv, inv.args[0], exitCode);
+	if (!device)
+	{
+		return exitCode;
+	}
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.readDeviceInfo(*device,
+				[&, finish](Result<app::DeviceInfo> result)
+				{
+					if (!result)
+					{
+						finish(inv.out.failure(busExitCode(result.error()), result.error()));
+						return;
+					}
+					const QString mask = u"%1"_s.arg(result->maskVersion, 4, 16, QLatin1Char('0'));
+					const QString manufacturer = u"M-%1"_s.arg(result->manufacturerId, 4, 16, QLatin1Char('0')).toUpper();
+					finish(inv.out.success(
+						{
+							{u"address"_s, qs(result->address.toString())},
+							{u"maskVersion"_s, mask},
+							{u"serial"_s, qs(result->serial.toString())},
+							{u"manufacturerId"_s, result->manufacturerId},
+							{u"manufacturer"_s, manufacturer},
+						},
+						u"address       %1\nmask version  %2\nserial        %3\nmanufacturer  %4"_s.arg(
+							qs(result->address.toString()), mask, qs(result->serial.toString()), manufacturer)));
+				});
+		});
+}
+
+} // namespace
+
+std::vector<Command> busCommands()
+{
+	const QCommandLineOption timeoutDiscover(u"timeout"_s, u"Seconds to collect answers (default 3)."_s, u"s"_s, u"3"_s);
+	const QCommandLineOption host(u"host"_s, u"Ask this host by unicast (disables multicast unless --multicast)."_s,
+		u"host"_s);
+	const QCommandLineOption port(u"port"_s, u"Port of --host (default 3671)."_s, u"port"_s, u"3671"_s);
+	const QCommandLineOption multicast(u"multicast"_s, u"Also search by multicast when --host is given."_s);
+	const QCommandLineOption readTimeout(u"timeout"_s, u"Seconds to wait for the response (default 3)."_s, u"s"_s, u"3"_s);
+	const QCommandLineOption count(u"count"_s, u"Stop after N telegrams (0 = never)."_s, u"n"_s, u"0"_s);
+	const QCommandLineOption monitorTimeout(u"timeout"_s, u"Give up after s seconds (0 = never; exit 4)."_s, u"s"_s, u"0"_s);
+	const QCommandLineOption monitorDpt(u"dpt"_s, u"Decode a group address with a DPT: ga=dpt (repeatable)."_s, u"ga=dpt"_s);
+	const QCommandLineOption programTimeout(u"timeout"_s,
+		u"Seconds to wait for a device in programming mode (default 60)."_s, u"s"_s, u"60"_s);
+	const QCommandLineOption overwrite(u"overwrite"_s, u"Program even if another device already uses the address."_s);
+
+	return {
+		{{u"bus"_s, u"discover"_s}, {}, u"Find KNXnet/IP interfaces (FR-BUS-1)."_s, {timeoutDiscover, host, port, multicast},
+			busDiscover},
+		{{u"group"_s, u"write"_s}, {u"ga"_s, u"dpt"_s, u"value"_s}, u"Send A_GroupValue_Write (FR-BUS-6)."_s,
+			{kInterfaceOption}, groupWrite},
+		{{u"group"_s, u"read"_s}, {u"ga"_s, u"dpt"_s}, u"Send A_GroupValue_Read and print the response (FR-BUS-6)."_s,
+			{kInterfaceOption, readTimeout}, groupRead},
+		{{u"monitor"_s}, {}, u"Print bus telegrams (FR-BUS-5)."_s, {kInterfaceOption, count, monitorTimeout, monitorDpt},
+			monitor},
+		{{u"device"_s, u"program-ia"_s}, {u"ia"_s},
+			u"Program the individual address of the device in programming mode (FR-COM-1)."_s,
+			{kInterfaceOption, programTimeout, overwrite}, programIa},
+		{{u"device"_s, u"info"_s}, {u"ia"_s}, u"Read mask version, serial number and manufacturer (FR-COM-4)."_s,
+			{kInterfaceOption}, deviceInfo},
+	};
+}
+
+} // namespace kestrel::cli

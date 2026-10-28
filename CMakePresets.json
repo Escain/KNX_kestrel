@@ -1,0 +1,64 @@
+{
+	"version": 6,
+	"cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+	"configurePresets": [
+		{
+			"name": "base",
+			"hidden": true,
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/build/${presetName}",
+			"cacheVariables": {
+				"CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+				"KESTREL_WARNINGS_AS_ERRORS": "ON"
+			}
+		},
+		{
+			"name": "debug",
+			"displayName": "GCC Debug",
+			"inherits": "base",
+			"cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CMAKE_CXX_COMPILER": "g++" }
+		},
+		{
+			"name": "debug-clang",
+			"displayName": "Clang Debug",
+			"inherits": "base",
+			"cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CMAKE_CXX_COMPILER": "clang++" }
+		},
+		{
+			"name": "release",
+			"displayName": "GCC RelWithDebInfo",
+			"inherits": "base",
+			"cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "CMAKE_CXX_COMPILER": "g++" }
+		},
+		{
+			"name": "asan",
+			"displayName": "Clang ASan+UBSan",
+			"inherits": "base",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Debug",
+				"CMAKE_CXX_COMPILER": "clang++",
+				"KESTREL_SANITIZE": "address;undefined"
+			}
+		},
+		{
+			"name": "headless",
+			"displayName": "Core + CLI only (no GUI)",
+			"inherits": "base",
+			"cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "KESTREL_BUILD_GUI": "OFF" }
+		}
+	],
+	"buildPresets": [
+		{ "name": "debug", "configurePreset": "debug" },
+		{ "name": "debug-clang", "configurePreset": "debug-clang" },
+		{ "name": "release", "configurePreset": "release" },
+		{ "name": "asan", "configurePreset": "asan" },
+		{ "name": "headless", "configurePreset": "headless" }
+	],
+	"testPresets": [
+		{ "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
+		{ "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true },
+		  "filter": { "exclude": { "label": "death" } } },
+		{ "name": "headless", "configurePreset": "headless", "output": { "outputOnFailure": true },
+		  "filter": { "exclude": { "label": "gui" } } }
+	]
+}

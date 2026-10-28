@@ -1,0 +1,8 @@
+foreach(app kestrel-sim kestrel-cli)
+	if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${app}/CMakeLists.txt)
+		add_subdirectory(${app})
+	endif()
+endforeach()
+if(KESTREL_BUILD_GUI AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/kestrel/CMakeLists.txt)
+	add_subdirectory(kestrel)
+endif()
