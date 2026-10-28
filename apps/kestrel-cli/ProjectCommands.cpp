@@ -687,7 +687,9 @@ int deviceLink(Invocation& inv)
 			if (!groupAddress)
 			{
 				const QString name = inv.isSet(u"ga-name"_s) ? inv.value(u"ga-name"_s) : qs(address->toString());
-				KESTREL_TRY(const auto id, model::addGroupAddress(*project, *address, name));
+				const QString dpt = definition->datapointType.section(u' ', 0, 0);
+				KESTREL_TRY(const auto id,
+					model::addGroupAddress(*project, *address, name, model::isValidDptRef(dpt) ? dpt : QString()));
 				groupAddress = id;
 			}
 			KESTREL_TRY(const auto link, model::link(*project, *objectId, *groupAddress));

@@ -9,6 +9,8 @@
 | [05-test-strategy.md](05-test-strategy.md) | Test pyramid, tools, traceability matrix |
 | [06-roadmap.md](06-roadmap.md) | Milestones |
 | [07-catalog.md](07-catalog.md) | Product files (`.knxprod`): ZIP reader, catalog model, tolerance rules |
+| [08-gui.md](08-gui.md) | GUI for configuring a network: catalog, catalog device editor and parameters, commissioning |
+| [09-memory-images.md](09-memory-images.md) | Parameter evaluation and memory images (ETS-identical), reading devices back |
 | [adr/](adr/) | Architecture Decision Records (one decision per file) |
 | [brainstorm/](brainstorm/) | Raw brainstorm-room proposals (round 1) and cross-critiques (round 2) |
 

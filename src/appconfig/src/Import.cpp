@@ -176,8 +176,9 @@ Result<QStringList> importSystemBImages(model::Project& project, model::Id<model
 					if (!address)
 					{
 						const knx::GroupAddress ga(raw);
+						// A new group address takes the datapoint type of the first object linked to it.
 						KESTREL_TRY(const auto created, model::addGroupAddress(project, ga,
-							QString::fromStdString(ga.toString())));
+							QString::fromStdString(ga.toString()), object.dpt));
 						address = created;
 					}
 					KESTREL_TRY(const auto linkId, model::link(project, objectId, *address));
