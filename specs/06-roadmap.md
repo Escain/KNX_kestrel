@@ -13,13 +13,14 @@
 | M8 Export | `.knxproj` export | FR-PRJ-5 |
 
 ## M1 open items (carried forward)
-- GUI: drag and drop (catalog → topology, GA → com object), preview tabs, named workspaces, GUI automation server + Robot GUI suites.
+- GUI: preview tabs, named workspaces, GUI automation server + Robot GUI suites. (Drag and drop catalog → topology and
+  GA → com object landed with the network-configuration GUI, see below.)
 - Model: dedicated operations for renumbering areas/lines and editing com-object DPT/flags/size (the view models use `Tx::set` today).
 - `tools/trace.py` traceability matrix; CI workflow; pre-commit hook for forbidden files; clang-format not installed on the dev box.
 - Refs cross into QML as text ids; revisit a `Q_GADGET` `EntityRef` if it becomes a bottleneck.
 - `tst_BusSession` takes about 35 s because of real protocol timeouts. Consider injecting shorter timeouts.
 - IA address check: treat a negative L_Data.con as "address free" and finish early (see 04 field notes).
-- GUI: a "devices in programming mode" action backed by `BusSession::readProgrammingMode`.
+- ~~GUI: a "devices in programming mode" action backed by `BusSession::readProgrammingMode`.~~ Done (`bus.programmingMode`).
 
 ## M2 progress
 - [x] `archive`: own in-memory ZIP reader over zlib (stored/deflate, ZIP64, CRC-32, UTF-8/CP437 names, data
@@ -29,7 +30,7 @@
       segments, parameter types, parameters/unions, parameter refs, com objects/refs, tables, load procedures, Dynamic
       tree + per-channel index, translations); merged com-object view; `kestrel-cli catalog inspect` (`07-catalog.md`).
 - [ ] `ModuleDefs` (module-based channels) and `knx_master.xml` (mask versions, DPTs) are noted but not parsed.
-- [ ] Validation against real vendor files through `KESTREL_PRIVATE_CORPUS` (MEAN WELL M-0162 actuator, push button).
+- [x] Validation against real vendor files through `KESTREL_PRIVATE_CORPUS`: MEAN WELL M-0162 actuator done (catalog, images, GUI); push button pending.
 - [ ] ZIP writer (byte-deterministic), `.kestrel` ZIP container; user catalog (SQLite); `DynamicEvaluator`;
       instantiating a product into the topology; parameter editor; `.knxproj` import; autosave.
 
@@ -48,3 +49,23 @@
 - [x] `kestrel-cli device import <ia>` (read-only: device configuration → project) and
       `kestrel-cli project download <dir> <device>` (`--dry-run`, `--save-images`). The real KAA-8R was imported
       into a private project; the images regenerated from it are identical to the ETS6 ones.
+
+## GUI: configuring a network (2026-10-28, `08-gui.md`)
+- [x] Catalog dock: import of `.knxprod` into the user catalog folder (`KESTREL_CATALOG_DIR` overrides it), a JSON
+      index (`index.json`) that is lazy and parsed off the GUI thread, a filter, and *Add Product to Line* (one undo step;
+      also by dragging onto Topology) (FR-CAT-1/2/3). The index is JSON for now; the SQLite user catalog is still open.
+- [x] Device editor for catalog devices: product and application, the active com objects (`appconfig::evaluate`),
+      linking that creates the com object (and a typed group address) on demand, dragging a GA from the Group Addresses
+      dock, and unlinking that removes an unlinked catalog com object (FR-DEV-2, FR-GA-3).
+- [x] Parameter editor: active parameters grouped by channel and block, with combo boxes, spin boxes and text fields,
+      reset, undo and re-evaluation on each edit (FR-DEV-1, first version).
+- [x] Commissioning dock and menu: program the individual address (with "press the button", progress and cancel),
+      download (with an injected planner, `appconfig::planDeviceDownload` by default, step progress, cancel, and
+      `downloadedHash`), device info, and devices in programming mode. The actions are in the device context menus
+      (FR-COM-1/2/4).
+- [x] Bus Connection dock trimmed to connection and discovery; `bus.connect` and `bus.discover` actions.
+- [ ] "Needs download" per device (FR-DEV-3), partial download (FR-COM-3), "Read configuration from device"
+      (`appconfig::importSystemBImages`).
+- [ ] Warn about links on com objects that a parameter change made inactive.
+- [ ] Parameter editor: units/suffixes, `ParameterSeparator`s, text parameters in com object texts, modules.
+- [ ] Check the drag-and-drop gesture by hand on a desktop session (the tests cover only the drop intents).

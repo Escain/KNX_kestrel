@@ -96,8 +96,12 @@ class TreePanelVM : public PanelVM
 	QML_ELEMENT
 	QML_UNCREATABLE("View models are created by the application")
 	Q_PROPERTY(QAbstractItemModel* model READ model CONSTANT)
+	Q_PROPERTY(QStringList dropFormats READ dropFormats CONSTANT)
 
 public:
+	/// MIME format of a dragged entity ref (data: "ga-…").
+	static inline const QString kRefMimeType = QStringLiteral("application/x-kestrel-ref");
+
 	TreePanelVM(const Services& services, const QString& origin, QObject* parent = nullptr);
 
 	QAbstractItemModel* model() const;
@@ -113,6 +117,16 @@ public:
 	Q_INVOKABLE QString refAt(const QModelIndex& index) const;
 	/// Context-menu action ids for an entity (the root ref for empty space).
 	virtual QStringList contextActions(model::EntityRef ref) const = 0;
+
+	// Drag and drop between docks (QML Drag.Automatic: works across QQuickWidgets).
+	/// True if the row can be dragged out (as kRefMimeType with its ref).
+	Q_INVOKABLE virtual bool canDrag(const QModelIndex& index) const;
+	/// MIME formats this view accepts.
+	virtual QStringList dropFormats() const { return {}; }
+	/// True if a drop of `format` on the row (invalid = empty space) would be handled.
+	Q_INVOKABLE virtual bool acceptsDrop(const QModelIndex& index, const QString& format) const;
+	/// Handles a drop. Returns whether something happened (lastError otherwise).
+	Q_INVOKABLE virtual bool dropOn(const QModelIndex& index, const QString& format, const QString& data);
 
 Q_SIGNALS:
 	/// Another view selected an entity shown here: the view should expand to, scroll to and select it.

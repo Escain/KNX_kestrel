@@ -14,6 +14,9 @@
 #include "kestrel/simnet/ScenarioLoader.hpp"
 #include "kestrel/simnet/Simulation.hpp"
 #include "kestrel/viewmodels/BusConnectionVM.hpp"
+#include "kestrel/viewmodels/CatalogPanelVM.hpp"
+#include "kestrel/viewmodels/CatalogService.hpp"
+#include "kestrel/viewmodels/CommissioningVM.hpp"
 #include "kestrel/viewmodels/GroupMonitorVM.hpp"
 #include "kestrel/viewmodels/ActionRegistry.hpp"
 #include "kestrel/viewmodels/DeviceEditorVM.hpp"
@@ -24,6 +27,7 @@
 
 #include <QAccessible>
 #include <QDir>
+#include <QFile>
 #include <QLabel>
 #include <QMenu>
 #include <QQuickItem>
@@ -106,6 +110,7 @@ class MainWindowTest : public QObject
 private:
 	QTemporaryDir m_temp;
 	QString m_projectDir;
+	QString m_catalogDir;
 	testing::SampleIds m_ids;
 
 	std::unique_ptr<MainWindow> makeWindow()
@@ -148,6 +153,11 @@ private Q_SLOTS:
 		g_previousHandler = qInstallMessageHandler(messageHandler);
 
 		QVERIFY(m_temp.isValid());
+		// The product catalog of every window: a private folder with the synthetic product file (ADR-009).
+		m_catalogDir = m_temp.filePath(u"catalog"_s);
+		QVERIFY(QDir().mkpath(m_catalogDir));
+		QVERIFY(QFile::copy(QStringLiteral(KESTREL_TEST_DATA_DIR "/catalog/M-FFFF.knxprod"), m_catalogDir + u"/M-FFFF.knxprod"_s));
+		qputenv("KESTREL_CATALOG_DIR", m_catalogDir.toUtf8());
 		m_projectDir = m_temp.filePath(u"sample"_s);
 		model::Project project(model::IdGenerator::sequential());
 		m_ids = testing::buildSampleProject(project);
@@ -165,13 +175,13 @@ private Q_SLOTS:
 		auto window = makeWindow();
 		QVERIFY(QTest::qWaitForWindowExposed(window.get()));
 		const QStringList expected{u"dock.buildings"_s, u"dock.topology"_s, u"dock.groupAddresses"_s, u"dock.properties"_s,
-			u"dock.problems"_s, u"dock.busConnection"_s};
+			u"dock.problems"_s, u"dock.busConnection"_s, u"dock.catalog"_s, u"dock.commissioning"_s};
 		for (const QString& id : expected)
 		{
 			QVERIFY2(window->dock(id), qPrintable(id));
 		}
 		const QStringList roots{u"buildingsPanel"_s, u"topologyPanel"_s, u"groupAddressPanel"_s, u"propertiesPanel"_s,
-			u"problemsPanel"_s, u"busConnectionPanel"_s};
+			u"problemsPanel"_s, u"busConnectionPanel"_s, u"catalogPanel"_s, u"commissioningPanel"_s};
 		for (qsizetype i = 0; i < roots.size(); ++i)
 		{
 			showDock(*window, expected[i]);
@@ -282,7 +292,9 @@ private Q_SLOTS:
 		QStringList names;
 		for (QAction* action : menu->actions())
 			names.append(action->isSeparator() ? u"-"_s : action->objectName());
-		QCOMPARE(names, (QStringList{u"device.open"_s, u"topology.addDevice"_s, u"-"_s, u"edit.rename"_s, u"edit.delete"_s}));
+		QCOMPARE(names,
+			(QStringList{u"device.open"_s, u"topology.addDevice"_s, u"catalog.addToLine"_s, u"-"_s, u"device.programAddress"_s,
+				u"device.download"_s, u"device.readInfo"_s, u"-"_s, u"edit.rename"_s, u"edit.delete"_s}));
 		QCOMPARE(window->workspace()->selection()->currentText(), model::EntityRef(m_ids.dimmer).toString());
 		menu->close();
 	}
@@ -369,7 +381,7 @@ private Q_SLOTS:
 			QVERIFY(!window.dock(u"dock.busConnection"_s)->isVisible());
 			QVERIFY(window.workspace()->actions()->trigger(u"view.resetLayout"_s));
 			QVERIFY(window.dock(u"dock.problems"_s)->isVisible());
-			QCOMPARE(window.tabifiedDockWidgets(window.dock(u"dock.problems"_s)).size(), 1); // + bus connection
+			QCOMPARE(window.tabifiedDockWidgets(window.dock(u"dock.problems"_s)).size(), 3); // + catalog, commissioning, bus
 			QCOMPARE(window.dockWidgetArea(window.dock(u"dock.properties"_s)), Qt::RightDockWidgetArea);
 			QCOMPARE(window.tabifiedDockWidgets(window.dock(u"dock.topology"_s)).size(), 2);
 			window.close();
@@ -427,6 +439,102 @@ private Q_SLOTS:
 		screenshot(*window, u"group-monitor"_s);
 		QVERIFY(window->openProject(m_projectDir));
 		QCOMPARE(window->documents()->documentIds(), QStringList{shell::DocumentArea::kGroupMonitorId});
+	}
+
+	void fr_cat_3__catalogDockAddsProductsAndTheEditorLinksThem()
+	{
+		auto window = makeWindow();
+		QVERIFY(window->openProject(m_projectDir));
+		viewmodels::Workspace* ws = window->workspace();
+		QCOMPARE(ws->catalog()->directory(), m_catalogDir);
+		showDock(*window, u"dock.topology"_s);
+		showDock(*window, u"dock.catalog"_s); // first show reads the catalog folder
+		QVERIFY(ws->catalog()->waitForIdle());
+		shell::QmlHost* catalogHost = window->dock(u"dock.catalog"_s)->host();
+		QObject* products = findInHost(catalogHost, u"catalog.products"_s);
+		QVERIFY(products);
+		QTRY_COMPARE(products->property("rows").toInt(), 2);
+		const QStringList unnamedCatalog = unnamedInteractiveItems(catalogHost->rootObject());
+		QVERIFY2(unnamedCatalog.isEmpty(), qPrintable(unnamedCatalog.join(u", "_s)));
+
+		// Add the push button to line 1.1 (one undo step), then open it.
+		ws->selection()->select(m_ids.line11, u"topology"_s);
+		viewmodels::CatalogPanelVM* catalog = ws->catalogPanel();
+		catalog->setCurrentRow(0);
+		QVERIFY(ws->actions()->isEnabled(u"catalog.addToLine"_s));
+		QVERIFY(ws->actions()->trigger(u"catalog.addToLine"_s));
+		const auto device = ws->selection()->current()->as<model::Device>();
+		QCOMPARE(ws->session()->project().devices().at(device).appProgramRef, u"M-FFFF_A-0001-10-0001"_s);
+		QObject* target = findInHost(catalogHost, u"catalog.target"_s);
+		QTRY_VERIFY(target->property("text").toString().contains(u"1.1"_s));
+		screenshot(*window, u"catalog"_s);
+
+		QVERIFY(ws->actions()->trigger(u"device.open"_s));
+		const QString id = shell::DocumentArea::deviceDocumentId(device);
+		shell::QmlHost* host = window->documents()->host(id);
+		QVERIFY(host);
+		QTRY_VERIFY(host->isLoaded());
+		auto* editor = qobject_cast<viewmodels::DeviceEditorVM*>(host->rootObject()->property("vm").value<QObject*>());
+		QVERIFY(editor);
+		QTRY_COMPARE(editor->catalogState(), u"ready"_s);
+		QTRY_VERIFY(findInHost(host, u"deviceEditor.catalogComObjects"_s));
+		QObject* table = findInHost(host, u"deviceEditor.catalogComObjects"_s);
+		QTRY_COMPARE(table->property("rows").toInt(), 4);
+		QVERIFY(editor->linkObject(u"M-FFFF_A-0001-10-0001_O-0_R-1"_s, u"0/0/1"_s));
+		editor->setCurrentObject(u"M-FFFF_A-0001-10-0001_O-0_R-1"_s);
+		const QStringList unnamed = unnamedInteractiveItems(host->rootObject());
+		QVERIFY2(unnamed.isEmpty(), qPrintable(unnamed.join(u", "_s)));
+		screenshot(*window, u"catalog-device-editor"_s);
+
+		// Parameters tab: one row per block and active parameter, edits re-evaluate the objects.
+		QObject* tabs = findInHost(host, u"deviceEditor.tabs"_s);
+		QVERIFY(tabs);
+		tabs->setProperty("currentIndex", 1);
+		QObject* parameters = findInHost(host, u"deviceEditor.parameters"_s);
+		QVERIFY(parameters);
+		QTRY_VERIFY(parameters->property("count").toInt() > 5);
+		QVERIFY(editor->setParameter(u"M-FFFF_A-0001-10-0001_P-4_R-1"_s, u"2"_s));
+		QTRY_COMPARE(table->property("rows").toInt(), 2);
+		const QStringList unnamedParameters = unnamedInteractiveItems(host->rootObject());
+		QVERIFY2(unnamedParameters.isEmpty(), qPrintable(unnamedParameters.join(u", "_s)));
+		screenshot(*window, u"device-parameters"_s);
+		QVERIFY(ws->session()->undo());
+		QTRY_COMPARE(table->property("rows").toInt(), 4);
+	}
+
+	void fr_com_1__commissioningDockShowsTheRunningOperation()
+	{
+		auto scenario = simnet::ScenarioLoader::fromJson(R"({ "interfaceAddress": "1.1.255", "devices": [] })");
+		QVERIFY(scenario.has_value());
+		simnet::Simulation sim(*scenario);
+		QVERIFY(sim.listen(0).has_value());
+
+		auto window = makeWindow();
+		QVERIFY(window->openProject(m_projectDir));
+		viewmodels::Workspace* ws = window->workspace();
+		viewmodels::BusConnectionVM* bus = ws->busConnection();
+		bus->setHost(u"127.0.0.1"_s);
+		bus->setPort(sim.port());
+		bus->connectToBus();
+		QTRY_VERIFY(bus->isConnected());
+		showDock(*window, u"dock.topology"_s);
+		ws->selection()->select(m_ids.button, u"topology"_s);
+
+		// No device is in programming mode: the dock asks for the button until cancelled.
+		QVERIFY(ws->actions()->trigger(u"device.programAddress"_s));
+		shell::QmlDock* dock = window->dock(u"dock.commissioning"_s);
+		QTRY_VERIFY(dock->isVisible() && dock->host()->isLoaded()); // shown by the operation
+		QObject* banner = findInHost(dock->host(), u"commissioning.button"_s);
+		QVERIFY(banner);
+		QTRY_VERIFY(banner->property("visible").toBool());
+		const QStringList unnamed = unnamedInteractiveItems(dock->host()->rootObject());
+		QVERIFY2(unnamed.isEmpty(), qPrintable(unnamed.join(u", "_s)));
+		screenshot(*window, u"commissioning"_s);
+		QVERIFY(ws->actions()->isEnabled(u"device.cancelOperation"_s));
+		QVERIFY(ws->actions()->trigger(u"device.cancelOperation"_s));
+		QTRY_VERIFY(!ws->commissioning()->isOperationActive());
+		QVERIFY(ws->commissioning()->lastResult().contains(u"cancelled"_s));
+		QCOMPARE(ws->commissioning()->log().size(), 1);
 	}
 
 	void nfr_2__repeatedConstructionAndTeardown()

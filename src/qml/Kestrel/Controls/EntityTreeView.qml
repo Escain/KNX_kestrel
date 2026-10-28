@@ -78,6 +78,20 @@ Item {
 		delegate: TreeViewDelegate {
 			id: cell
 			Accessible.name: String(cell.model.display ?? "")
+
+			// Rows the view model allows (e.g. group addresses) drag out as entity refs. Drag.Automatic runs a
+			// platform drag, so another dock (another QQuickWidget) can receive it.
+			Drag.dragType: Drag.Automatic
+			Drag.supportedActions: Qt.CopyAction | Qt.LinkAction
+			Drag.mimeData: ({ "application/x-kestrel-ref": String(cell.model.ref ?? ""), "text/plain": String(cell.model.display ?? "") })
+			Drag.active: dragHandler.active
+
+			DragHandler {
+				id: dragHandler
+				target: null
+				enabled: cell.row >= 0 && root.vm.canDrag(tree.index(cell.row, 0))
+				grabPermissions: PointerHandler.CanTakeOverFromAnything
+			}
 		}
 
 		// Deferred: the view syncs with its model after this handler runs.
@@ -102,6 +116,34 @@ Item {
 				if (index.valid)
 					root.vm.activateIndex(index)
 			}
+		}
+	}
+
+	// Drops from other docks (formats listed by the view model, e.g. catalog products on Topology).
+	DropArea {
+		id: dropArea
+		objectName: root.viewName + ".dropArea"
+		anchors.fill: tree
+		keys: root.vm.dropFormats
+		enabled: root.vm.dropFormats.length > 0
+
+		function formatOf(drag: var): string {
+			for (const format of root.vm.dropFormats) {
+				if (drag.formats.indexOf(format) >= 0)
+					return format
+			}
+			return ""
+		}
+
+		onPositionChanged: drag => {
+			const index = root.indexAt(Qt.point(drag.x, drag.y))
+			drag.accepted = root.vm.acceptsDrop(index, dropArea.formatOf(drag))
+		}
+		onDropped: drop => {
+			const format = dropArea.formatOf(drop)
+			const index = root.indexAt(Qt.point(drop.x, drop.y))
+			if (format !== "" && root.vm.dropOn(index, format, drop.getDataAsString(format)))
+				drop.accept(Qt.CopyAction)
 		}
 	}
 

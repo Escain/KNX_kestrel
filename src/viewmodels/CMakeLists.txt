@@ -6,12 +6,19 @@ set(_vm_headers
 	include/kestrel/viewmodels/BuildingTreeModel.hpp
 	include/kestrel/viewmodels/BuildingsPanelVM.hpp
 	include/kestrel/viewmodels/BusConnectionVM.hpp
+	include/kestrel/viewmodels/CatalogComObjectModel.hpp
+	include/kestrel/viewmodels/CatalogPanelVM.hpp
+	include/kestrel/viewmodels/CatalogService.hpp
 	include/kestrel/viewmodels/ComObjectTableModel.hpp
+	include/kestrel/viewmodels/CommissioningVM.hpp
+	include/kestrel/viewmodels/ConfigurationHooks.hpp
 	include/kestrel/viewmodels/DeviceEditorVM.hpp
+	include/kestrel/viewmodels/DeviceParameterModel.hpp
 	include/kestrel/viewmodels/Format.hpp
 	include/kestrel/viewmodels/GroupAddressPanelVM.hpp
 	include/kestrel/viewmodels/GroupAddressTreeModel.hpp
 	include/kestrel/viewmodels/GroupMonitorVM.hpp
+	include/kestrel/viewmodels/KeyedTableModel.hpp
 	include/kestrel/viewmodels/PanelVM.hpp
 	include/kestrel/viewmodels/ProblemsModel.hpp
 	include/kestrel/viewmodels/ProblemsPanelVM.hpp
@@ -30,12 +37,19 @@ set(_vm_sources
 	src/BuildingTreeModel.cpp
 	src/BuildingsPanelVM.cpp
 	src/BusConnectionVM.cpp
+	src/CatalogComObjectModel.cpp
+	src/CatalogPanelVM.cpp
+	src/CatalogService.cpp
 	src/ComObjectTableModel.cpp
+	src/CommissioningVM.cpp
+	src/ConfigurationHooks.cpp
 	src/DeviceEditorVM.cpp
+	src/DeviceParameterModel.cpp
 	src/Format.cpp
 	src/GroupAddressPanelVM.cpp
 	src/GroupAddressTreeModel.cpp
 	src/GroupMonitorVM.cpp
+	src/KeyedTableModel.cpp
 	src/PanelVM.cpp
 	src/ProblemsModel.cpp
 	src/ProblemsPanelVM.cpp
@@ -65,5 +79,6 @@ target_include_directories(kestrel_viewmodels
 	# qmltyperegistrar includes the QML_ELEMENT headers by file name
 	PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/kestrel/viewmodels ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(kestrel_viewmodels
-	PUBLIC kestrel::options kestrel::model kestrel::persist kestrel::validate kestrel::dpt kestrel::app Qt6::Core Qt6::Gui Qt6::Qml
+	PUBLIC kestrel::options kestrel::model kestrel::persist kestrel::validate kestrel::dpt kestrel::app kestrel::catalog kestrel::appconfig
+		kestrel::download Qt6::Core Qt6::Gui Qt6::Qml
 	PRIVATE kestrel::warnings kestrel::sanitizers)

@@ -54,14 +54,19 @@ std::optional<model::Id<model::GroupRange>> GroupAddressPanelVM::rangeFor(model:
 
 std::optional<model::Id<model::GroupRange>> GroupAddressPanelVM::innermostRange(std::uint16_t raw) const
 {
+	return innermostGroupRange(project(), raw);
+}
+
+std::optional<model::Id<model::GroupRange>> innermostGroupRange(const model::Project& project, std::uint16_t raw)
+{
 	std::optional<model::Id<model::GroupRange>> found;
 	std::optional<model::Id<model::GroupRange>> parent;
 	for (bool descended = true; descended;)
 	{
 		descended = false;
-		for (const auto id : project().groupRangesIn(parent))
+		for (const auto id : project.groupRangesIn(parent))
 		{
-			if (project().groupRanges().at(id).contains(raw))
+			if (project.groupRanges().at(id).contains(raw))
 			{
 				found = id;
 				parent = id;
@@ -219,6 +224,11 @@ QStringList GroupAddressPanelVM::contextActions(model::EntityRef ref) const
 			return {u"ga.addAddress"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
 		default: return {u"ga.addMainGroup"_s, u"ga.addAddress"_s};
 	}
+}
+
+bool GroupAddressPanelVM::canDrag(const QModelIndex& index) const
+{
+	return treeModel()->refAt(index).kind == model::EntityKind::GroupAddress;
 }
 
 } // namespace kestrel::viewmodels

@@ -6,7 +6,8 @@ import QtQuick.Layouts
 import Kestrel.ViewModels
 import Kestrel.Controls
 
-/// Bus connection dock (FR-BUS-1/2) with the commissioning status of the selected device (FR-COM-1/4).
+/// Bus connection dock (FR-BUS-1/2): manual endpoint, connect/disconnect and interface discovery.
+/// Commissioning is in the Commissioning dock.
 Pane {
 	id: root
 
@@ -15,10 +16,10 @@ Pane {
 	objectName: "busConnectionPanel"
 	padding: 8
 
-	// Three columns in a wide (bottom) dock, one column in a narrow (side) dock.
+	// Two columns in a wide (bottom) dock, one column in a narrow (side) dock.
 	GridLayout {
 		anchors.fill: parent
-		columns: root.width > 760 ? 3 : 1
+		columns: root.width > 560 ? 2 : 1
 		columnSpacing: 16
 		rowSpacing: 6
 
@@ -143,6 +144,9 @@ Pane {
 					Accessible.name: text
 					width: interfaces.width
 					text: entry.modelData.name + "  —  " + entry.modelData.host + ":" + entry.modelData.port
+						+ (entry.modelData.tunnelling ? "" : qsTr("  (no tunnelling)"))
+					ToolTip.visible: hovered
+					ToolTip.text: qsTr("Double-click to connect")
 					onClicked: {
 						root.vm.host = entry.modelData.host
 						root.vm.port = entry.modelData.port
@@ -152,58 +156,15 @@ Pane {
 
 				Label {
 					anchors.centerIn: parent
+					width: parent.width - 16
+					horizontalAlignment: Text.AlignHCenter
+					wrapMode: Text.Wrap
 					visible: interfaces.count === 0
-					text: root.vm.discovering ? qsTr("Searching…") : qsTr("No interface found yet")
+					text: root.vm.discovering ? qsTr("Searching…")
+						: root.vm.discovered ? qsTr("No KNXnet/IP interface answered. Enter its address on the left.")
+						: qsTr("Search for KNXnet/IP interfaces on the local network")
 					opacity: 0.6
 				}
-			}
-		}
-
-		ColumnLayout {
-			Layout.fillWidth: true
-			Layout.alignment: Qt.AlignTop
-			Layout.preferredWidth: 1
-			spacing: 6
-
-			Label {
-				text: qsTr("Commissioning")
-				font.bold: true
-			}
-			RowLayout {
-				Layout.fillWidth: true
-				spacing: 2
-
-				ActionButton {
-					actions: root.vm.actions
-					actionId: "device.programAddress"
-				}
-				ActionButton {
-					actions: root.vm.actions
-					actionId: "device.readInfo"
-				}
-				ActionButton {
-					actions: root.vm.actions
-					actionId: "device.cancelProgramming"
-				}
-			}
-			Label {
-				objectName: "bus.operation"
-				Layout.fillWidth: true
-				visible: root.vm.operationActive
-				text: root.vm.operation
-				wrapMode: Text.Wrap
-			}
-			Label {
-				objectName: "bus.lastResult"
-				Layout.fillWidth: true
-				visible: !root.vm.operationActive && text !== ""
-				text: root.vm.lastResult
-				opacity: 0.8
-				wrapMode: Text.Wrap
-			}
-
-			Item {
-				Layout.fillHeight: true
 			}
 		}
 	}

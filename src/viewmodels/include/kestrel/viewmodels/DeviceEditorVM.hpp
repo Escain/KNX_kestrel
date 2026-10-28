@@ -1,16 +1,31 @@
 #pragma once
 
 // Device editor (central tab): the device's group objects and their group address links (FR-GA-3).
-// M1 has no catalog, so group objects are defined manually.
+//
+// Two kinds of devices (specs/08-gui.md §3):
+// - Catalog devices (appProgramRef set): the product, its application and the active com objects of the
+//   application program come from the CatalogService (parsed off the GUI thread; catalogState "loading" until
+//   then). The active set is chosen by the ActiveComObjectFilter hook (appconfig::evaluate by default).
+//   Linking a group address creates the model ComObject on demand (catalogRef = ComObjectRef id) and, if the
+//   typed address does not exist yet, the GroupAddress too, in one undo step. Unlinking the last group address
+//   of a catalog com object removes its model ComObject in the same step.
+// - Manual devices (M1): group objects are defined by hand.
 
+#include "kestrel/viewmodels/ConfigurationHooks.hpp"
 #include "kestrel/viewmodels/PanelVM.hpp"
 
+#include <QHash>
 #include <QVariantList>
+
+#include <memory>
 
 namespace kestrel::viewmodels
 {
 
+class CatalogComObjectModel;
+class CatalogService;
 class ComObjectTableModel;
+class DeviceParameterModel;
 
 class DeviceEditorVM : public PanelVM
 {
@@ -28,9 +43,28 @@ class DeviceEditorVM : public PanelVM
 	Q_PROPERTY(QString currentLabel READ currentLabel NOTIFY currentChanged)
 	Q_PROPERTY(QVariantList currentLinks READ currentLinks NOTIFY currentChanged)
 	Q_PROPERTY(QVariantList sizeOptions READ sizeOptions CONSTANT)
+	Q_PROPERTY(bool catalogDevice READ isCatalogDevice NOTIFY deviceChanged)
+	Q_PROPERTY(QString catalogState READ catalogState NOTIFY catalogChanged)
+	Q_PROPERTY(QString catalogMessage READ catalogMessage NOTIFY catalogChanged)
+	Q_PROPERTY(QString productText READ productText NOTIFY catalogChanged)
+	Q_PROPERTY(QString orderNumber READ orderNumber NOTIFY catalogChanged)
+	Q_PROPERTY(QString applicationText READ applicationText NOTIFY catalogChanged)
+	Q_PROPERTY(QAbstractItemModel* catalogComObjects READ catalogComObjects CONSTANT)
+	Q_PROPERTY(QString currentObject READ currentObject NOTIFY currentChanged)
+	Q_PROPERTY(QVariantList groupAddressOptions READ groupAddressOptions NOTIFY groupAddressesChanged)
+	Q_PROPERTY(QAbstractItemModel* parameters READ parameters CONSTANT)
+	Q_PROPERTY(int parameterCount READ parameterCount NOTIFY parametersChanged)
+	Q_PROPERTY(QString parameterWarnings READ parameterWarnings NOTIFY parametersChanged)
 
 public:
-	DeviceEditorVM(const Services& services, model::Id<model::Device> device, QObject* parent = nullptr);
+	/// MIME format of a dragged entity ref ("ga-…"): the Group Address dock is a drag source.
+	static inline const QString kRefMimeType = QStringLiteral("application/x-kestrel-ref");
+
+	/// `catalog` may be null (catalog devices then report catalogState "missing"); `filter` empty =
+	/// activeComObjects.
+	DeviceEditorVM(const Services& services, model::Id<model::Device> device, CatalogService* catalog = nullptr,
+		ActiveComObjectFilter filter = {}, QObject* parent = nullptr);
+	~DeviceEditorVM() override;
 
 	model::Id<model::Device> device() const { return m_device; }
 	QString deviceRef() const { return model::EntityRef(m_device).toString(); }
@@ -49,6 +83,29 @@ public:
 	/// [{text, value}] for the size selector.
 	static QVariantList sizeOptions();
 
+	// --- Catalog devices -------------------------------------------------------------------------------------
+	bool isCatalogDevice() const;
+	/// "none" (manual device), "loading", "ready", "missing" (program not in the catalog) or "error".
+	QString catalogState() const { return m_catalogState; }
+	QString catalogMessage() const { return m_catalogMessage; }
+	QString productText() const;
+	QString orderNumber() const;
+	/// "Kestrel Test Button 2-fold 1.0 (MV-07B0)"
+	QString applicationText() const;
+	QAbstractItemModel* catalogComObjects() const;
+	CatalogComObjectModel* catalogModel() const { return m_catalogModel; }
+	/// Current catalog com object (ComObjectRef id), "" if none.
+	QString currentObject() const { return m_currentObject; }
+	/// [{text: "1/2/3  Kitchen light", address: "1/2/3", ref}] of every group address, by address.
+	QVariantList groupAddressOptions() const;
+	/// Re-evaluates the parameters and re-applies the active com object filter. Called on device edits.
+	void refreshComObjects();
+	QAbstractItemModel* parameters() const;
+	DeviceParameterModel* parameterModel() const { return m_parameters; }
+	int parameterCount() const;
+	/// Evaluation warnings (unsupported dynamic elements), one per line.
+	QString parameterWarnings() const { return m_parameterWarnings; }
+
 	/// Adds a group object with nextNumber(). `flags`: letters of "CRWTUI"; `dpt` may be empty.
 	Q_INVOKABLE QString addComObject(const QString& name, const QString& function, int sizeInBit,
 		const QString& flags = QStringLiteral("CWT"), const QString& dpt = {});
@@ -63,9 +120,26 @@ public:
 	Q_INVOKABLE bool setDpt(const QString& comObjectRef, const QString& dpt);
 	Q_INVOKABLE bool setSize(const QString& comObjectRef, int sizeInBit);
 
+	Q_INVOKABLE void setCurrentObjectRow(int row);
+	Q_INVOKABLE void setCurrentObject(const QString& refId);
+	/// Links a catalog com object to a group address given as "1/2/3" (created if missing, with the object's
+	/// DPT), as "1/2/3 Name" (an entry of groupAddressOptions) or as a ref "ga-…". One undo step.
+	Q_INVOKABLE bool linkObject(const QString& refId, const QString& address);
+	/// Drop of a dragged ref on a row of the catalog table (a group address ref links it).
+	Q_INVOKABLE bool dropOnObjectRow(int row, const QString& ref);
+	/// Drop of a dragged ref on a row of the manual table.
+	Q_INVOKABLE bool dropOnComObjectRow(int row, const QString& ref);
+	/// Sets a parameter (ParameterRef id) to a canonical value, validated against its type; the default value
+	/// resets it. One undo step; consecutive edits of one parameter merge.
+	Q_INVOKABLE bool setParameter(const QString& refId, const QString& value);
+	Q_INVOKABLE bool resetParameter(const QString& refId);
+
 Q_SIGNALS:
 	void deviceChanged();
 	void currentChanged();
+	void catalogChanged();
+	void groupAddressesChanged();
+	void parametersChanged();
 	/// The device was deleted: the editor should close.
 	void deviceRemoved();
 
@@ -73,10 +147,30 @@ private:
 	void onChanged(const model::ChangeSet& changeSet);
 	std::optional<model::Id<model::ComObject>> comObjectFor(const QString& ref);
 	std::optional<model::Id<model::Link>> linkFor(const QString& ref);
+	/// The model com object whose links are shown (manual current, or the current catalog object's).
+	std::optional<model::Id<model::ComObject>> shownComObject() const;
+	void loadCatalog();
+	void setCatalogState(const QString& state, const QString& message);
+	/// Group address for a link target text; creates nothing. nullopt + `raw` set: a new address is needed.
+	std::optional<model::Id<model::GroupAddress>> findGroupAddress(const QString& text, std::optional<std::uint16_t>& raw);
 
 	model::Id<model::Device> m_device;
 	ComObjectTableModel* m_model;
 	std::optional<model::Id<model::ComObject>> m_current;
+
+	CatalogService* m_catalog;
+	ActiveComObjectFilter m_filter;
+	CatalogComObjectModel* m_catalogModel;
+	QString m_catalogState = QStringLiteral("none");
+	QString m_catalogMessage;
+	QString m_catalogFile;
+	QString m_loadedProgram;
+	std::shared_ptr<const void> m_database; ///< keeps the program alive (catalog::LoadedDatabase)
+	const catalog::ApplicationProgram* m_program = nullptr;
+	QHash<QString, QString> m_channelTexts;
+	QString m_currentObject;
+	DeviceParameterModel* m_parameters;
+	QString m_parameterWarnings;
 };
 
 } // namespace kestrel::viewmodels

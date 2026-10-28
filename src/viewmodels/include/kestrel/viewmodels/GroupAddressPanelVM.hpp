@@ -40,7 +40,12 @@ public:
 	std::optional<model::Id<model::GroupRange>> innermostRange(std::uint16_t raw) const;
 
 	QStringList contextActions(model::EntityRef ref) const override;
+	/// Group addresses can be dragged onto com objects in a device editor.
+	bool canDrag(const QModelIndex& index) const override;
 };
+
+/// Innermost group range containing `raw` (nullopt if none).
+std::optional<model::Id<model::GroupRange>> innermostGroupRange(const model::Project& project, std::uint16_t raw);
 
 /// Normalises a DPT text to the stored form ("9.001" -> "DPST-9-1"); nullopt if malformed. Empty stays empty.
 std::optional<QString> normalizeDpt(const QString& text);

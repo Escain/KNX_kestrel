@@ -1,7 +1,10 @@
 #include "kestrel/viewmodels/DeviceEditorVM.hpp"
 
 #include "kestrel/model/Operations.hpp"
+#include "kestrel/viewmodels/CatalogComObjectModel.hpp"
+#include "kestrel/viewmodels/CatalogService.hpp"
 #include "kestrel/viewmodels/ComObjectTableModel.hpp"
+#include "kestrel/viewmodels/DeviceParameterModel.hpp"
 #include "kestrel/viewmodels/Format.hpp"
 #include "kestrel/viewmodels/GroupAddressPanelVM.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
@@ -19,8 +22,52 @@ namespace kestrel::viewmodels
 
 using model::EntityKind;
 
-DeviceEditorVM::DeviceEditorVM(const Services& services, model::Id<model::Device> device, QObject* parent)
-	: PanelVM(services, u"deviceEditor"_s, parent), m_device(device), m_model(new ComObjectTableModel(services.session, device, this))
+namespace
+{
+
+/// Model com object for a catalog com object (the first link creates it).
+Result<model::ComObject> modelComObject(const catalog::EffectiveComObject& source)
+{
+	if (source.sizeInBit == 0)
+	{
+		return makeError(ErrorCode::Unsupported,
+			QObject::tr("Unknown size \"%1\" of com object %2").arg(source.objectSize).arg(source.number).toStdString());
+	}
+	model::ComObject object;
+	object.number = source.number;
+	object.name = source.text.isEmpty() ? source.name : source.text;
+	object.function = source.functionText;
+	object.sizeInBit = source.sizeInBit;
+	object.flags.communication = source.flags.communication;
+	object.flags.read = source.flags.read;
+	object.flags.write = source.flags.write;
+	object.flags.transmit = source.flags.transmit;
+	object.flags.update = source.flags.update;
+	object.flags.readOnInit = source.flags.readOnInit;
+	// Several DPTs may be listed: keep the first one the model accepts.
+	for (const QString& dpt : source.datapointType.split(u' ', Qt::SkipEmptyParts))
+	{
+		if (model::isValidDptRef(dpt))
+		{
+			object.dpt = dpt;
+			break;
+		}
+	}
+	object.catalogRef = source.refId;
+	return object;
+}
+
+} // namespace
+
+DeviceEditorVM::DeviceEditorVM(const Services& services, model::Id<model::Device> device, CatalogService* catalog,
+	ActiveComObjectFilter filter, QObject* parent)
+	: PanelVM(services, u"deviceEditor"_s, parent)
+	, m_device(device)
+	, m_model(new ComObjectTableModel(services.session, device, this))
+	, m_catalog(catalog)
+	, m_filter(filter ? std::move(filter) : ActiveComObjectFilter(&activeComObjects))
+	, m_catalogModel(new CatalogComObjectModel(services.session, device, this))
+	, m_parameters(new DeviceParameterModel(this))
 {
 	connect(session(), &ProjectSession::changed, this, &DeviceEditorVM::onChanged);
 	connect(session(), &ProjectSession::projectReplaced, this,
@@ -29,6 +76,436 @@ DeviceEditorVM::DeviceEditorVM(const Services& services, model::Id<model::Device
 			if (!exists())
 				Q_EMIT deviceRemoved();
 		});
+	if (m_catalog)
+	{
+		connect(m_catalog, &CatalogService::entriesChanged, this,
+			[this]
+			{
+				if (m_catalogState != u"ready"_s)
+					loadCatalog();
+				else
+					Q_EMIT catalogChanged();
+			});
+		connect(m_catalog, &CatalogService::busyChanged, this,
+			[this]
+			{
+				if (m_catalogState == u"loading"_s && !m_catalog->isBusy())
+					loadCatalog();
+			});
+		connect(m_catalog, &CatalogService::databaseReady, this,
+			[this](const QString& file)
+			{
+				if (file == m_catalogFile && m_catalogState != u"ready"_s)
+					loadCatalog();
+			});
+		connect(m_catalog, &CatalogService::databaseFailed, this,
+			[this](const QString& file, const QString& message)
+			{
+				if (file == m_catalogFile && m_catalogState != u"ready"_s)
+					setCatalogState(u"error"_s, tr("Cannot read the product file %1: %2").arg(file, message));
+			});
+	}
+	loadCatalog();
+}
+
+DeviceEditorVM::~DeviceEditorVM() = default;
+
+bool DeviceEditorVM::isCatalogDevice() const
+{
+	return exists() && !project().devices().at(m_device).appProgramRef.isEmpty();
+}
+
+void DeviceEditorVM::setCatalogState(const QString& state, const QString& message)
+{
+	if (state == m_catalogState && message == m_catalogMessage)
+		return;
+	m_catalogState = state;
+	m_catalogMessage = message;
+	Q_EMIT catalogChanged();
+}
+
+void DeviceEditorVM::loadCatalog()
+{
+	if (!isCatalogDevice())
+	{
+		m_program = nullptr;
+		m_database.reset();
+		m_loadedProgram.clear();
+		m_catalogModel->setObjects({}, {});
+		m_parameters->setRows({});
+		setCatalogState(u"none"_s, {});
+		return;
+	}
+	const QString programId = project().devices().at(m_device).appProgramRef;
+	if (m_program && m_loadedProgram == programId)
+	{
+		refreshComObjects();
+		setCatalogState(u"ready"_s, {});
+		return;
+	}
+	m_program = nullptr;
+	m_database.reset();
+	if (!m_catalog)
+	{
+		setCatalogState(u"missing"_s, tr("No product catalog is available."));
+		return;
+	}
+	m_catalog->ensureScanned();
+	const CatalogEntry* entry = m_catalog->entryForProgram(programId);
+	if (!entry || !entry->programAvailable)
+	{
+		if (m_catalog->isBusy())
+			setCatalogState(u"loading"_s, tr("Reading the product catalog…"));
+		else
+			setCatalogState(u"missing"_s,
+				tr("The application program %1 is not in the catalog. Import its product file (Catalog ▸ Import Product File…).")
+					.arg(programId));
+		return;
+	}
+	m_catalogFile = entry->file;
+	const auto database = m_catalog->cachedDatabase(m_catalogFile);
+	if (!database)
+	{
+		setCatalogState(u"loading"_s, tr("Reading %1…").arg(m_catalogFile));
+		if (m_catalog->requestDatabase(m_catalogFile))
+			loadCatalog();
+		return;
+	}
+	const catalog::ApplicationProgram* program = database->database.findApplicationProgram(programId);
+	if (!program)
+	{
+		setCatalogState(u"missing"_s, tr("The application program %1 is missing from %2.").arg(programId, m_catalogFile));
+		return;
+	}
+	m_database = database;
+	m_program = program;
+	m_loadedProgram = programId;
+	const QString language = project().settings().contentLanguage;
+	m_channelTexts.clear();
+	for (const catalog::Channel& channel : program->channels)
+	{
+		if (channel.id.isEmpty())
+			continue;
+		const QString text = program->text(channel.id, u"Text"_s, language);
+		m_channelTexts.insert(channel.id, text.isEmpty() ? channel.name : text);
+	}
+	refreshComObjects();
+	setCatalogState(u"ready"_s, {});
+}
+
+void DeviceEditorVM::refreshComObjects()
+{
+	if (!m_program || !exists())
+		return;
+	const model::Device& device = project().devices().at(m_device);
+	const QString language = project().settings().contentLanguage;
+	m_catalogModel->setObjects(m_filter(*m_program, device, language), m_channelTexts);
+	const auto evaluation = appconfig::evaluate(*m_program, parameterValues(*m_program, device));
+	if (evaluation)
+	{
+		m_parameters->setRows(parameterRows(*m_program, device, *evaluation, language));
+		m_parameterWarnings = evaluation->warnings.join(u'\n');
+	}
+	else
+	{
+		m_parameters->setRows({});
+		m_parameterWarnings = errorText(evaluation.error());
+	}
+	Q_EMIT parametersChanged();
+	if (!m_currentObject.isEmpty() && !m_catalogModel->object(m_currentObject))
+	{
+		m_currentObject.clear();
+		Q_EMIT currentChanged();
+	}
+}
+
+QString DeviceEditorVM::productText() const
+{
+	if (!exists())
+		return {};
+	const model::Device& device = project().devices().at(m_device);
+	if (m_catalog)
+	{
+		if (const CatalogEntry* entry = m_catalog->entryForProduct(device.productRef))
+			return entry->productText;
+		if (const CatalogEntry* entry = m_catalog->entryForProgram(device.appProgramRef))
+			return entry->productText;
+	}
+	return device.productRef;
+}
+
+QString DeviceEditorVM::orderNumber() const
+{
+	if (!exists() || !m_catalog)
+		return {};
+	const model::Device& device = project().devices().at(m_device);
+	const CatalogEntry* entry = m_catalog->entryForProduct(device.productRef);
+	return entry ? entry->orderNumber : QString();
+}
+
+QString DeviceEditorVM::applicationText() const
+{
+	if (!exists())
+		return {};
+	const QString programId = project().devices().at(m_device).appProgramRef;
+	if (m_catalog)
+	{
+		if (const CatalogEntry* entry = m_catalog->entryForProgram(programId))
+			return u"%1 %2 (%3)"_s.arg(entry->programName, entry->versionText(), entry->maskVersion);
+	}
+	return programId;
+}
+
+QAbstractItemModel* DeviceEditorVM::catalogComObjects() const
+{
+	return m_catalogModel;
+}
+
+QVariantList DeviceEditorVM::groupAddressOptions() const
+{
+	std::vector<const model::GroupAddress*> sorted;
+	for (const model::GroupAddress& address : project().groupAddresses())
+		sorted.push_back(&address);
+	std::sort(sorted.begin(), sorted.end(), [](auto* a, auto* b) { return a->raw < b->raw; });
+	QVariantList result;
+	result.reserve(static_cast<qsizetype>(sorted.size()));
+	for (const model::GroupAddress* address : sorted)
+	{
+		const QString text = groupAddressText(project(), address->raw);
+		result.append(QVariantMap{
+			{u"text"_s, address->name.isEmpty() ? text : u"%1  %2"_s.arg(text, address->name)},
+			{u"address"_s, text},
+			{u"ref"_s, model::EntityRef(address->id).toString()},
+		});
+	}
+	return result;
+}
+
+std::optional<model::Id<model::ComObject>> DeviceEditorVM::shownComObject() const
+{
+	if (isCatalogDevice() && m_catalogState == u"ready"_s)
+		return m_catalogModel->modelObject(m_currentObject);
+	if (m_current && project().comObjects().contains(*m_current))
+		return m_current;
+	return std::nullopt;
+}
+
+void DeviceEditorVM::setCurrentObjectRow(int row)
+{
+	setCurrentObject(m_catalogModel->keyAt(row));
+}
+
+void DeviceEditorVM::setCurrentObject(const QString& refId)
+{
+	const QString next = m_catalogModel->object(refId) ? refId : QString();
+	if (next != m_currentObject)
+	{
+		m_currentObject = next;
+		Q_EMIT currentChanged();
+	}
+	if (const auto object = m_catalogModel->modelObject(m_currentObject))
+		selection()->select(*object, origin());
+}
+
+std::optional<model::Id<model::GroupAddress>> DeviceEditorVM::findGroupAddress(const QString& text, std::optional<std::uint16_t>& raw)
+{
+	raw.reset();
+	const QString trimmed = text.trimmed();
+	if (const auto ref = model::EntityRef::parse(trimmed); ref && ref->is<model::GroupAddress>())
+	{
+		if (project().groupAddresses().contains(ref->as<model::GroupAddress>()))
+			return ref->as<model::GroupAddress>();
+		setError(tr("The group address no longer exists."));
+		return std::nullopt;
+	}
+	// "1/2/3" or "1/2/3  Name" (an entry of groupAddressOptions).
+	const QString first = trimmed.section(u' ', 0, 0, QString::SectionSkipEmpty);
+	const auto parsed = parseGroupAddress(first);
+	if (!parsed)
+	{
+		setError(tr("Not a group address: %1").arg(text));
+		return std::nullopt;
+	}
+	for (const model::GroupAddress& address : project().groupAddresses())
+	{
+		if (address.raw == *parsed)
+			return address.id;
+	}
+	raw = *parsed;
+	return std::nullopt;
+}
+
+bool DeviceEditorVM::linkObject(const QString& refId, const QString& address)
+{
+	const catalog::EffectiveComObject* source = m_catalogModel->object(refId);
+	if (!source)
+	{
+		setError(tr("Not an active com object of this device: %1").arg(refId));
+		return false;
+	}
+	std::optional<std::uint16_t> newRaw;
+	const auto existing = findGroupAddress(address, newRaw);
+	if (!existing && !newRaw)
+		return false;
+	auto object = modelComObject(*source);
+	if (!object)
+	{
+		setError(object.error());
+		return false;
+	}
+	const auto present = m_catalogModel->modelObject(refId);
+	const bool ok = check(project().edit(tr("Link group address"),
+		[&](model::Tx&) -> Status
+		{
+			model::Id<model::GroupAddress> target;
+			if (existing)
+			{
+				target = *existing;
+			}
+			else
+			{
+				QString name = object->name;
+				if (!object->function.isEmpty())
+					name = u"%1 %2"_s.arg(name, object->function).trimmed();
+				KESTREL_TRY(target, model::addGroupAddress(project(), knx::GroupAddress(*newRaw), name, object->dpt,
+										innermostGroupRange(project(), *newRaw)));
+			}
+			model::Id<model::ComObject> comObject;
+			if (present)
+			{
+				comObject = *present;
+			}
+			else
+			{
+				KESTREL_TRY(comObject, model::addComObject(project(), m_device, *object));
+			}
+			KESTREL_TRY(const auto link, model::link(project(), comObject, target));
+			(void)link;
+			return kestrel::ok();
+		}));
+	if (ok)
+		setCurrentObject(refId);
+	return ok;
+}
+
+QAbstractItemModel* DeviceEditorVM::parameters() const
+{
+	return m_parameters;
+}
+
+int DeviceEditorVM::parameterCount() const
+{
+	return m_parameters->parameterCount();
+}
+
+bool DeviceEditorVM::setParameter(const QString& refId, const QString& value)
+{
+	const ParameterRow* row = m_parameters->row(refId);
+	if (!row || row->header || !m_program)
+	{
+		setError(tr("Not an active parameter of this device: %1").arg(refId));
+		return false;
+	}
+	if (row->readOnly)
+	{
+		setError(tr("The parameter \"%1\" is read-only.").arg(row->text));
+		return false;
+	}
+	QString canonical = value.trimmed();
+	if (row->editor == u"enum"_s)
+	{
+		const bool known = std::any_of(row->options.begin(), row->options.end(),
+			[&](const QVariant& option) { return option.toMap().value(u"value"_s).toString() == canonical; });
+		if (!known)
+		{
+			setError(tr("\"%1\" is not a choice of \"%2\".").arg(value, row->text));
+			return false;
+		}
+	}
+	else if (row->editor == u"number"_s)
+	{
+		bool ok = false;
+		const qint64 number = canonical.toLongLong(&ok);
+		if (!ok || number < row->minimum || number > row->maximum)
+		{
+			setError(tr("\"%1\" accepts whole numbers from %2 to %3.").arg(row->text).arg(row->minimum).arg(row->maximum));
+			return false;
+		}
+		canonical = QString::number(number);
+	}
+	else if (row->editor == u"float"_s)
+	{
+		bool ok = false;
+		const double number = canonical.toDouble(&ok);
+		if (!ok || number < row->minimumFloat || number > row->maximumFloat)
+		{
+			setError(tr("\"%1\" accepts numbers from %2 to %3.").arg(row->text).arg(row->minimumFloat).arg(row->maximumFloat));
+			return false;
+		}
+	}
+	else if (row->editor != u"text"_s)
+	{
+		setError(tr("The parameter \"%1\" cannot be edited.").arg(row->text));
+		return false;
+	}
+	// Values belong to the Parameter: other refs of the same parameter must not keep a stale value.
+	const catalog::ParameterRef* ref = m_program->findParameterRef(refId);
+	QStringList siblings;
+	for (const auto& [otherRef, otherValue] : project().devices().at(m_device).params)
+	{
+		const catalog::ParameterRef* other = m_program->findParameterRef(otherRef);
+		if (otherRef != refId && other && ref && other->refId == ref->refId)
+			siblings.append(otherRef);
+	}
+	const std::optional<QString> stored = canonical == row->defaultValue ? std::nullopt : std::optional<QString>(canonical);
+	if (siblings.isEmpty())
+		return check(model::setDeviceParam(project(), m_device, refId, stored));
+	return check(project().edit(tr("Set parameter"),
+		[&](model::Tx&) -> Status
+		{
+			for (const QString& sibling : siblings)
+				KESTREL_CHECK(model::setDeviceParam(project(), m_device, sibling, std::nullopt));
+			return model::setDeviceParam(project(), m_device, refId, stored);
+		}));
+}
+
+bool DeviceEditorVM::resetParameter(const QString& refId)
+{
+	const ParameterRow* row = m_parameters->row(refId);
+	if (!row || row->header)
+	{
+		setError(tr("Not an active parameter of this device: %1").arg(refId));
+		return false;
+	}
+	return setParameter(refId, row->defaultValue);
+}
+
+bool DeviceEditorVM::dropOnObjectRow(int row, const QString& ref)
+{
+	const QString refId = m_catalogModel->keyAt(row);
+	if (refId.isEmpty())
+		return false;
+	const auto parsed = model::EntityRef::parse(ref.trimmed());
+	if (!parsed || !parsed->is<model::GroupAddress>())
+	{
+		setError(tr("Only group addresses can be dropped on a com object."));
+		return false;
+	}
+	return linkObject(refId, ref.trimmed());
+}
+
+bool DeviceEditorVM::dropOnComObjectRow(int row, const QString& ref)
+{
+	const QString object = m_model->refString(m_model->index(row, 0));
+	const auto parsed = model::EntityRef::parse(ref.trimmed());
+	if (object.isEmpty() || !parsed || !parsed->is<model::GroupAddress>()
+		|| !project().groupAddresses().contains(parsed->as<model::GroupAddress>()))
+	{
+		setError(tr("Only group addresses can be dropped on a group object."));
+		return false;
+	}
+	const auto id = comObjectFor(object);
+	return id && check(model::link(project(), *id, parsed->as<model::GroupAddress>()));
 }
 
 bool DeviceEditorVM::exists() const
@@ -74,6 +551,15 @@ QString DeviceEditorVM::current() const
 
 QString DeviceEditorVM::currentLabel() const
 {
+	if (isCatalogDevice() && m_catalogState == u"ready"_s)
+	{
+		const catalog::EffectiveComObject* object = m_catalogModel->object(m_currentObject);
+		if (!object)
+			return {};
+		const QString text = object->text.isEmpty() ? object->name : object->text;
+		return object->functionText.isEmpty() ? u"%1: %2"_s.arg(object->number).arg(text)
+											  : u"%1: %2 – %3"_s.arg(object->number).arg(text, object->functionText);
+	}
 	if (!m_current || !project().comObjects().contains(*m_current))
 		return {};
 	const model::ComObject& object = project().comObjects().at(*m_current);
@@ -83,9 +569,10 @@ QString DeviceEditorVM::currentLabel() const
 QVariantList DeviceEditorVM::currentLinks() const
 {
 	QVariantList result;
-	if (!m_current || !project().comObjects().contains(*m_current))
+	const auto shown = shownComObject();
+	if (!shown)
 		return result;
-	auto links = project().linksOfComObject(*m_current);
+	auto links = project().linksOfComObject(*shown);
 	std::stable_partition(links.begin(), links.end(), [&](auto id) { return project().links().at(id).sending; });
 	for (const auto id : links)
 	{
@@ -222,7 +709,19 @@ bool DeviceEditorVM::linkGroupAddress(const QString& comObjectRef, const QString
 bool DeviceEditorVM::unlink(const QString& linkRef)
 {
 	const auto id = linkFor(linkRef);
-	return id && check(model::unlink(project(), *id));
+	if (!id)
+		return false;
+	const model::Id<model::ComObject> object = project().links().at(*id).comObject;
+	const bool catalogObject = !project().comObjects().at(object).catalogRef.isEmpty();
+	return check(project().edit(tr("Unlink group address"),
+		[&](model::Tx&) -> Status
+		{
+			KESTREL_CHECK(model::unlink(project(), *id));
+			// A catalog com object exists in the model only while it has links.
+			if (catalogObject && project().linksOfComObject(object).empty())
+				KESTREL_CHECK(model::removeComObject(project(), object));
+			return kestrel::ok();
+		}));
 }
 
 bool DeviceEditorVM::setSending(const QString& linkRef)
@@ -298,6 +797,17 @@ void DeviceEditorVM::onChanged(const model::ChangeSet& changeSet)
 	{
 		m_current.reset();
 	}
+	if (changeSet.contains(model::EntityRef(m_device)))
+	{
+		// Application changed: reload; parameters changed: the active com objects may differ.
+		const QString programId = project().devices().at(m_device).appProgramRef;
+		if (programId != m_loadedProgram || m_catalogState != u"ready"_s)
+			loadCatalog();
+		else
+			refreshComObjects();
+	}
+	if (changeSet.touches(model::EntityKind::GroupAddress) || changeSet.touches(model::EntityKind::Project))
+		Q_EMIT groupAddressesChanged();
 	Q_EMIT deviceChanged();
 	Q_EMIT currentChanged();
 }

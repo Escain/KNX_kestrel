@@ -4,6 +4,8 @@
 
 #include "kestrel/viewmodels/PanelVM.hpp"
 
+#include <functional>
+
 namespace kestrel::viewmodels
 {
 
@@ -35,6 +37,16 @@ public:
 	std::optional<model::Id<model::Line>> lineFor(model::EntityRef ref) const;
 
 	QStringList contextActions(model::EntityRef ref) const override;
+
+	/// Handler of catalog products dropped on a line or device (format CatalogPanelVM::kMimeType, data = key).
+	using CatalogDropHandler = std::function<bool(const QString& key, model::Id<model::Line> line)>;
+	void setCatalogDropHandler(CatalogDropHandler handler) { m_catalogDrop = std::move(handler); }
+	QStringList dropFormats() const override;
+	bool acceptsDrop(const QModelIndex& index, const QString& format) const override;
+	bool dropOn(const QModelIndex& index, const QString& format, const QString& data) override;
+
+private:
+	CatalogDropHandler m_catalogDrop;
 };
 
 } // namespace kestrel::viewmodels

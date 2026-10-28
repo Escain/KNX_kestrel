@@ -44,7 +44,7 @@ Status: **v1.0** (2026-10-28), synthesised from the brainstorm room
 | `kestrel::bus` | T1 | Qt I/O adapters: `UdpTunnelLink` (QUdpSocket + `knx::TunnelClient`), discovery, timers; runs on a bus thread |
 | `kestrel::simnet` | T1 | `KnxIpServer`: exposes a `sim::VirtualBus` on a real UDP port (used by `kestrel-sim` and in-process Qt tests) |
 | `kestrel::app` | T1 | Use-case services shared by GUI and CLI: `BusSession` (bus thread, group read/write, monitor ring buffer, IA programming, device info) |
-| `kestrel::viewmodels` | T2 | `ProjectSession` (document lifecycle; the CLI is stateless and does not need it), `ShadowTreeModel`-based item models, panel view models, `SelectionService`, `ActionRegistry` (QtGui/Qml, **no** Quick/Widgets) |
+| `kestrel::viewmodels` | T2 | `ProjectSession` (document lifecycle; the CLI is stateless and does not need it), `ShadowTreeModel`-based item models, panel view models, `SelectionService`, `ActionRegistry`, `CatalogService` (user catalog), `CommissioningVM` (QtGui/Qml, **no** Quick/Widgets); uses `catalog` and `appconfig` — see `08-gui.md` |
 | `kestrel_qml_*` | T2 | QML modules `Kestrel.Controls`, `Kestrel.Views` — presentation only |
 | `kestrel::shell` | T2 | `MainWindow`, `QmlHost` (QQuickWidget), docks, workspace layouts |
 
@@ -85,7 +85,11 @@ state machines with a manual clock: no sockets, no sleeps, no event loop.
 `sim` links. `app::BusSession` owns the link on a dedicated `QThread`, and the GUI talks to it via queued signals.
 The group monitor ingests telegrams into a ring buffer, and the GUI drains it in batches (20–30 Hz).
 
-### 3.5 Clean room (ADR-009)
+### 3.5 GUI for configuring a network
+Docks for the catalog and for commissioning, the catalog device editor with its parameters, and the hooks for the
+configuration engine are described in `08-gui.md`.
+
+### 3.6 Clean room (ADR-009)
 No ETS binaries are decompiled. Proprietary XML is never committed. CI fixtures are hand-written from the public
 spec (fake manufacturer `M-FFFF`). Real vendor files are used only via the opt-in `KESTREL_PRIVATE_CORPUS` env var.
 

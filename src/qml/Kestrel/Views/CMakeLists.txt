@@ -8,6 +8,8 @@ qt_add_qml_module(kestrel_qml_views
 	QML_FILES
 		BuildingsPanel.qml
 		BusConnectionPanel.qml
+		CatalogPanel.qml
+		CommissioningPanel.qml
 		DeviceEditor.qml
 		GroupAddressPanel.qml
 		GroupMonitor.qml

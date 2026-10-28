@@ -177,4 +177,19 @@ void TreePanelVM::onSelectionChanged()
 	}
 }
 
+bool TreePanelVM::canDrag(const QModelIndex&) const
+{
+	return false;
+}
+
+bool TreePanelVM::acceptsDrop(const QModelIndex&, const QString&) const
+{
+	return false;
+}
+
+bool TreePanelVM::dropOn(const QModelIndex&, const QString&, const QString&)
+{
+	return false;
+}
+
 } // namespace kestrel::viewmodels

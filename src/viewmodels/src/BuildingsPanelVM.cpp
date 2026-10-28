@@ -86,7 +86,8 @@ QStringList BuildingsPanelVM::contextActions(model::EntityRef ref) const
 		case model::EntityKind::BuildingPart:
 			return {u"building.addFloor"_s, u"building.addRoom"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
 		case model::EntityKind::Device:
-			return {u"device.open"_s, u"building.unplaceDevice"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
+			return {u"device.open"_s, u"building.unplaceDevice"_s, sep, u"device.programAddress"_s, u"device.download"_s,
+				u"device.readInfo"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
 		default: return {u"building.addBuilding"_s};
 	}
 }

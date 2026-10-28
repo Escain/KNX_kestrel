@@ -75,7 +75,7 @@ Pane {
 		Label {
 			Layout.fillWidth: true
 			Layout.topMargin: 12
-			text: qsTr("Start in the Topology panel: add an area, a line and devices. Define group addresses, then open a device (double-click) to add group objects and link them.")
+			text: qsTr("Start in the Topology panel: add an area and a line. Import the manufacturers' product files in the Catalog panel and add products to the selected line (or drag them onto it). Open a device (double-click) to set its parameters and link its group objects to group addresses (drag them from the Group Addresses panel). Then connect to the bus to program addresses and download.")
 			opacity: 0.7
 			wrapMode: Text.Wrap
 		}

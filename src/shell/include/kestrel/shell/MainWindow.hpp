@@ -7,7 +7,7 @@
 //   dock.buildings, dock.topology, dock.groupAddresses   left, tabbed
 //   dock.properties                                      right
 //   dock.problems                                        bottom
-//   dock.busConnection                                   bottom, tabbed with problems
+//   dock.catalog, dock.commissioning, dock.busConnection bottom, tabbed with problems
 // Central tabs: Welcome, device editors, the group monitor.
 // Bump kLayoutVersion whenever docks are added or renamed.
 //
@@ -53,7 +53,7 @@ class MainWindow : public QMainWindow
 	Q_OBJECT
 
 public:
-	static constexpr int kLayoutVersion = 2;
+	static constexpr int kLayoutVersion = 3;
 
 	explicit MainWindow(MainWindowOptions options = {}, QWidget* parent = nullptr);
 	~MainWindow() override;
@@ -78,6 +78,10 @@ public:
 	void openGroupMonitor();
 	/// Puts every dock back to its default place.
 	void resetLayout();
+	/// Shows and raises a dock.
+	void showDock(const QString& id);
+	/// Asks for .knxprod files and imports them into the catalog.
+	void chooseAndImportProducts();
 
 protected:
 	void closeEvent(QCloseEvent* event) override;
@@ -107,6 +111,7 @@ private:
 	QMenu* m_viewMenu = nullptr;
 	QMenu* m_projectMenu = nullptr;
 	QMenu* m_busMenu = nullptr;
+	QMenu* m_commissioningMenu = nullptr;
 	QMenu* m_helpMenu = nullptr;
 	QLabel* m_dirtyLabel = nullptr;
 	QToolButton* m_problemsButton = nullptr;

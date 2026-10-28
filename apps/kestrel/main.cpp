@@ -31,8 +31,10 @@ int main(int argc, char* argv[])
 	parser.addPositionalArgument(u"project"_s, u"Project folder to open."_s, u"[project]"_s);
 	const QCommandLineOption screenshot(u"screenshot"_s, u"Save a screenshot of the main window and quit (testing)."_s, u"file"_s);
 	const QCommandLineOption quitAfter(u"quit-after-ms"_s, u"Quit after this many milliseconds (testing)."_s, u"ms"_s);
+	const QCommandLineOption edit(u"edit"_s, u"Open the editor of this device (id from kestrel-cli project info)."_s, u"device-id"_s);
 	parser.addOption(screenshot);
 	parser.addOption(quitAfter);
+	parser.addOption(edit);
 	parser.process(app);
 
 	const bool testRun = parser.isSet(screenshot) || parser.isSet(quitAfter);
@@ -45,6 +47,16 @@ int main(int argc, char* argv[])
 	if (!parser.positionalArguments().isEmpty() && !window.openProject(parser.positionalArguments().constFirst()))
 	{
 		std::fprintf(stderr, "kestrel: cannot open %s\n", qPrintable(parser.positionalArguments().constFirst()));
+	}
+	if (parser.isSet(edit))
+	{
+		const auto device = kestrel::model::Id<kestrel::model::Device>::parse(parser.value(edit));
+		if (!device)
+		{
+			std::fprintf(stderr, "kestrel: invalid device id %s\n", qPrintable(parser.value(edit)));
+			return 2;
+		}
+		window.openDevice(*device);
 	}
 
 	if (testRun)

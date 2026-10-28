@@ -2,6 +2,7 @@
 
 #include "kestrel/model/Operations.hpp"
 #include "kestrel/viewmodels/ActionRegistry.hpp"
+#include "kestrel/viewmodels/CatalogPanelVM.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
 #include "kestrel/viewmodels/TopologyTreeModel.hpp"
 
@@ -162,11 +163,36 @@ QStringList TopologyPanelVM::contextActions(model::EntityRef ref) const
 	switch (ref.kind)
 	{
 		case model::EntityKind::Area: return {u"topology.addLine"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
-		case model::EntityKind::Line: return {u"topology.addDevice"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
+		case model::EntityKind::Line:
+			return {u"topology.addDevice"_s, u"catalog.addToLine"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
 		case model::EntityKind::Device:
-			return {u"device.open"_s, u"topology.addDevice"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
+			return {u"device.open"_s, u"topology.addDevice"_s, u"catalog.addToLine"_s, sep, u"device.programAddress"_s,
+				u"device.download"_s, u"device.readInfo"_s, sep, u"edit.rename"_s, u"edit.delete"_s};
 		default: return {u"topology.addArea"_s};
 	}
+}
+
+QStringList TopologyPanelVM::dropFormats() const
+{
+	return {CatalogPanelVM::kMimeType};
+}
+
+bool TopologyPanelVM::acceptsDrop(const QModelIndex& index, const QString& format) const
+{
+	return format == CatalogPanelVM::kMimeType && m_catalogDrop && lineFor(treeModel()->refAt(index)).has_value();
+}
+
+bool TopologyPanelVM::dropOn(const QModelIndex& index, const QString& format, const QString& data)
+{
+	if (format != CatalogPanelVM::kMimeType || !m_catalogDrop)
+		return false;
+	const auto line = lineFor(treeModel()->refAt(index));
+	if (!line)
+	{
+		setError(tr("Drop products on a line or on a device of the line."));
+		return false;
+	}
+	return m_catalogDrop(data, *line);
 }
 
 } // namespace kestrel::viewmodels

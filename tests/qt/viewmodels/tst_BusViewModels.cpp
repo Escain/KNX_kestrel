@@ -1,5 +1,6 @@
 // Bus view models against an in-process simnet::Simulation over loopback (NFR-5): connection (FR-BUS-2),
-// group monitor and group read/write (FR-BUS-5/6), IA programming (FR-COM-1), device info (FR-COM-4).
+// group monitor and group read/write (FR-BUS-5/6), IA programming (FR-COM-1), download (FR-COM-2),
+// device info (FR-COM-4).
 
 #include "SampleProject.hpp"
 
@@ -9,6 +10,9 @@
 #include "kestrel/simnet/Simulation.hpp"
 #include "kestrel/viewmodels/ActionRegistry.hpp"
 #include "kestrel/viewmodels/BusConnectionVM.hpp"
+#include "kestrel/viewmodels/CatalogPanelVM.hpp"
+#include "kestrel/viewmodels/CatalogService.hpp"
+#include "kestrel/viewmodels/CommissioningVM.hpp"
 #include "kestrel/viewmodels/GroupMonitorVM.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
 #include "kestrel/viewmodels/SelectionService.hpp"
@@ -20,6 +24,7 @@
 #include <QAbstractItemModelTester>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTest>
 
 #include <memory>
@@ -37,7 +42,24 @@ const QByteArray kScenario = R"({
 		{ "name": "switch-a", "address": "1.1.1", "serial": "FFFF:00001234", "maskVersion": "0705",
 		  "groupObjects": [ { "ga": "1/1/1", "flags": "CWTU", "dpt": "1.001", "value": "00" },
 		                    { "ga": "1/1/2", "flags": "CRT", "dpt": "9.001", "value": "0c 33" } ] },
-		{ "name": "fresh", "address": "15.15.255", "serial": "FFFF:00005678" } ] })";
+		{ "name": "fresh", "address": "15.15.255", "serial": "FFFF:00005678" },
+		{ "name": "systemb", "address": "1.1.21", "serial": "FFFF:00009999", "maskVersion": "07B0" } ] })";
+
+Bytes hex(std::initializer_list<int> values)
+{
+	Bytes bytes;
+	for (int v : values)
+		bytes.push_back(static_cast<std::uint8_t>(v));
+	return bytes;
+}
+
+/// A minimal System B load: application program state machine and its version property.
+download::Plan simplePlan()
+{
+	using namespace download;
+	return Plan{{Authorize{}, Unload{4, false}, Load{4}, WriteProp{4, kPidProgramVersion, hex({0xff, 0xff, 0x00, 0x01, 0x10}), true},
+		LoadCompleted{4}, Restart{}}};
+}
 
 app::TelegramRecord record(std::uint16_t destination, std::uint16_t source = 0x1101)
 {
@@ -58,9 +80,11 @@ class BusViewModelsTest : public QObject
 
 private:
 	std::unique_ptr<simnet::Simulation> m_sim;
+	std::unique_ptr<QTemporaryDir> m_catalogDir;
 	std::unique_ptr<viewmodels::Workspace> m_ws;
 	testing::SampleIds m_ids;
 	model::Id<model::Device> m_newDevice;
+	model::Id<model::Device> m_systemB; ///< 1.1.21, a catalog device (button program)
 
 	model::Project& project() { return m_ws->session()->project(); }
 
@@ -83,9 +107,11 @@ private Q_SLOTS:
 		m_sim = std::make_unique<simnet::Simulation>(*scenario);
 		QVERIFY(m_sim->listen(0).has_value());
 
-		m_ws = std::make_unique<viewmodels::Workspace>();
+		m_catalogDir = std::make_unique<QTemporaryDir>();
+		m_ws = std::make_unique<viewmodels::Workspace>(nullptr, m_catalogDir->path());
 		model::Project p(model::IdGenerator::sequential());
 		m_ids = testing::buildSampleProject(p);
+		m_systemB = *model::addDevice(p, m_ids.line11, 21, u"Button"_s, u"M-FFFF_H-0001_P-KTB.2"_s, u"M-FFFF_A-0001-10-0001"_s);
 		QVERIFY(model::addGroupAddress(p, knx::GroupAddress(0x0901), u"Hall switch"_s, u"DPST-1-1"_s, m_ids.heating).has_value());
 		QVERIFY(model::addGroupAddress(p, knx::GroupAddress(0x0902), u"Hall temperature"_s, u"DPST-9-1"_s, m_ids.heating).has_value());
 		m_newDevice = *model::addDevice(p, m_ids.line11, 20, u"New device"_s);
@@ -98,6 +124,7 @@ private Q_SLOTS:
 	{
 		m_ws.reset();
 		m_sim.reset();
+		m_catalogDir.reset();
 	}
 
 	void nfr_7__telegramModelAppendsBatchesWithinItsCapacity()
@@ -203,12 +230,16 @@ private Q_SLOTS:
 	{
 		QVERIFY(connect());
 		m_sim->device("fresh")->setProgMode(true);
-		viewmodels::BusConnectionVM* bus = m_ws->busConnection();
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
 		m_ws->selection()->select(m_newDevice, u"test"_s);
+		QCOMPARE(bus->deviceLabel(), u"1.1.20 New device"_s);
 		QVERIFY(m_ws->actions()->isEnabled(u"device.programAddress"_s));
+		QSignalSpy started(bus, &viewmodels::CommissioningVM::operationStarted);
 		QVERIFY(m_ws->actions()->trigger(u"device.programAddress"_s));
+		QCOMPARE(started.count(), 1);
 		QVERIFY(bus->isOperationActive());
 		QVERIFY(bus->isCancellable());
+		QVERIFY(bus->isWaitingForButton());
 		QVERIFY(!m_ws->actions()->isEnabled(u"device.readInfo"_s)); // one operation at a time
 		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 20000));
 		QVERIFY2(bus->lastError().isEmpty(), qPrintable(bus->lastError()));
@@ -217,15 +248,18 @@ private Q_SLOTS:
 		QVERIFY(!m_ws->session()->canUndo()); // a commissioning fact, not an edit
 		QCOMPARE(m_sim->device("fresh")->address(), knx::IndividualAddress(0x1114));
 		QVERIFY(bus->lastResult().contains(u"1.1.20"_s));
+		QVERIFY(bus->lastSucceeded());
+		QVERIFY(bus->log().constFirst().contains(u"1.1.20"_s));
+		QVERIFY(bus->deviceStatus().contains(u"Address programmed"_s));
 	}
 
 	void fr_com_1__programmingCanBeCancelled()
 	{
 		QVERIFY(connect());
-		viewmodels::BusConnectionVM* bus = m_ws->busConnection();
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
 		QVERIFY(bus->programAddress(model::EntityRef(m_newDevice).toString()));
 		QVERIFY(waitFor([bus] { return bus->operation().contains(u"programming button"_s); }));
-		QVERIFY(m_ws->actions()->trigger(u"device.cancelProgramming"_s));
+		QVERIFY(m_ws->actions()->trigger(u"device.cancelOperation"_s));
 		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }));
 		QVERIFY(!bus->lastError().isEmpty());
 		QVERIFY(!project().deviceState(m_newDevice).iaProgrammed);
@@ -234,7 +268,7 @@ private Q_SLOTS:
 	void fr_com_4__readDeviceInfoRecordsTheSerial()
 	{
 		QVERIFY(connect());
-		viewmodels::BusConnectionVM* bus = m_ws->busConnection();
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
 		QVERIFY(!bus->readDeviceInfo(model::EntityRef(m_ids.house).toString())); // not a device
 		QVERIFY(bus->readDeviceInfo(model::EntityRef(m_ids.dimmer).toString())); // 1.1.1 = switch-a
 		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 10000));
@@ -244,12 +278,100 @@ private Q_SLOTS:
 		QVERIFY(!m_ws->session()->canUndo());
 	}
 
+	void fr_com_2__downloadWithoutPlannerExplainsWhy()
+	{
+		QVERIFY(connect());
+		m_ws->setDownloadPlanner({});
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
+		QVERIFY(!bus->isPlannerAvailable());
+		m_ws->selection()->select(m_ids.dimmer, u"test"_s);
+		QVERIFY(!m_ws->actions()->isEnabled(u"device.download"_s)); // no application program
+		m_ws->selection()->select(m_systemB, u"test"_s);
+		QVERIFY(m_ws->actions()->isEnabled(u"device.download"_s));
+		QVERIFY(m_ws->actions()->trigger(u"device.download"_s));
+		QVERIFY(!bus->isOperationActive());
+		QVERIFY(bus->lastResult().contains(u"not available yet"_s));
+		QVERIFY(!bus->lastSucceeded());
+	}
+
+	void fr_com_2__downloadRunsThePlanWithProgress()
+	{
+		QVERIFY(connect());
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
+		int planned = 0;
+		m_ws->setDownloadPlanner(
+			[&planned, device = m_systemB](const model::Project& project, model::Id<model::Device> id) -> Result<download::Plan>
+			{
+				++planned;
+				if (id != device || !project.devices().contains(id))
+					return makeError(ErrorCode::NotFound, "wrong device");
+				return simplePlan();
+			});
+		m_ws->selection()->select(m_systemB, u"test"_s);
+		QSignalSpy changed(bus, &viewmodels::CommissioningVM::operationChanged);
+		QVERIFY(m_ws->actions()->trigger(u"device.download"_s));
+		QVERIFY(bus->isOperationActive());
+		QCOMPARE(bus->operationKind(), u"download"_s);
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 30000));
+		QVERIFY2(bus->lastSucceeded(), qPrintable(bus->lastError() + bus->lastResult()));
+		QCOMPARE(planned, 1);
+		QVERIFY(bus->lastResult().contains(u"6 steps"_s));
+		QVERIFY(changed.count() > 6); // planning, then one update per step, then the result
+		QCOMPARE(project().deviceState(m_systemB).downloadedHash, viewmodels::planHash(simplePlan()));
+		QVERIFY(!m_ws->session()->canUndo());
+		QVERIFY(m_ws->session()->isDirty());
+		QCOMPARE(m_sim->device("systemb")->property(4, download::kPidProgramVersion), std::optional(hex({0xff, 0xff, 0x00, 0x01, 0x10})));
+		QVERIFY(bus->deviceStatus().contains(u"Application downloaded"_s));
+
+		// A plan the device refuses fails cleanly; the hash is not touched.
+		m_ws->setDownloadPlanner([](const model::Project&, model::Id<model::Device>) -> Result<download::Plan>
+			{ return download::Plan{{download::Authorize{}, download::Unload{4, false}, download::LoadCompleted{4}}}; });
+		QVERIFY(bus->download());
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 30000));
+		QVERIFY(!bus->lastSucceeded());
+		QVERIFY(!bus->lastError().isEmpty());
+
+		// A planner error is shown.
+		m_ws->setDownloadPlanner([](const model::Project&, model::Id<model::Device>) -> Result<download::Plan>
+			{ return makeError(ErrorCode::Unsupported, "mask MV-0705 is not supported"); });
+		QVERIFY(bus->download());
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 10000));
+		QVERIFY(bus->lastError().contains(u"MV-0705"_s));
+	}
+
+	void fr_com_2__downloadFromTheCatalogWithAppconfig()
+	{
+		// The default planner: catalog product database + appconfig::planDeviceDownload.
+		QVERIFY(m_ws->catalogPanel()->importFiles({QStringLiteral(KESTREL_TEST_DATA_DIR "/catalog/M-FFFF.knxprod")}));
+		QVERIFY(m_ws->catalog()->waitForIdle());
+		QVERIFY(connect());
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
+		QVERIFY(bus->isPlannerAvailable());
+		QVERIFY(bus->download(model::EntityRef(m_systemB).toString()));
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 60000));
+		QVERIFY2(bus->lastSucceeded(), qPrintable(bus->lastError() + u" / "_s + bus->lastResult()));
+		QVERIFY(!project().deviceState(m_systemB).downloadedHash.isEmpty());
+		QCOMPARE(*m_sim->device("systemb")->loadState(4), std::uint8_t{1}); // loaded
+	}
+
+	void fr_com_1__devicesInProgrammingModeAreListed()
+	{
+		QVERIFY(connect());
+		m_sim->device("fresh")->setProgMode(true);
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
+		QVERIFY(m_ws->actions()->trigger(u"bus.programmingMode"_s));
+		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 10000));
+		QVERIFY2(bus->lastResult().contains(u"15.15.255"_s), qPrintable(bus->lastResult()));
+	}
+
 	void fr_bus_2__operationsNeedAConnection()
 	{
-		viewmodels::BusConnectionVM* bus = m_ws->busConnection();
+		viewmodels::CommissioningVM* bus = m_ws->commissioning();
 		m_ws->selection()->select(m_newDevice, u"test"_s);
 		QVERIFY(!m_ws->actions()->isEnabled(u"device.programAddress"_s));
+		QVERIFY(!m_ws->actions()->isEnabled(u"device.download"_s));
 		QVERIFY(!bus->programAddress(model::EntityRef(m_newDevice).toString()));
+		QVERIFY(!bus->download(model::EntityRef(m_systemB).toString()));
 		auto monitor = m_ws->createGroupMonitor();
 		QVERIFY(!monitor->write(u"1/1/1"_s, u"on"_s));
 		QVERIFY(monitor->lastError().contains(u"Not connected"_s));

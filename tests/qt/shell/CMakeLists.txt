@@ -5,6 +5,7 @@ endif()
 
 kestrel_add_qt_test(shell MainWindow SOURCES tst_MainWindow.cpp LIBS kestrel::shell kestrel::simnet)
 target_include_directories(tst_mainwindow PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../viewmodels)
+target_compile_definitions(tst_mainwindow PRIVATE KESTREL_TEST_DATA_DIR="${PROJECT_SOURCE_DIR}/tests/data")
 
 # Helper (not a test): writes the sample project to a folder, for screenshots and manual checks.
 add_executable(kestrel_make_sample_project make_sample_project.cpp)

@@ -6,6 +6,8 @@
 #include "kestrel/viewmodels/ActionRegistry.hpp"
 #include "kestrel/viewmodels/BuildingsPanelVM.hpp"
 #include "kestrel/viewmodels/BusConnectionVM.hpp"
+#include "kestrel/viewmodels/CatalogPanelVM.hpp"
+#include "kestrel/viewmodels/CommissioningVM.hpp"
 #include "kestrel/viewmodels/GroupAddressPanelVM.hpp"
 #include "kestrel/viewmodels/ProblemsPanelVM.hpp"
 #include "kestrel/viewmodels/ProjectSession.hpp"
@@ -20,6 +22,7 @@
 #include <QCursor>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QLabel>
 #include <QLoggingCategory>
 #include <QMenu>
@@ -42,6 +45,7 @@ namespace
 {
 const QString kGeometryKey = u"mainWindow/geometry"_s;
 const QString kStateKey = u"mainWindow/state"_s;
+const QString kImportDirKey = u"catalog/importDir"_s;
 } // namespace
 
 MainWindow::MainWindow(MainWindowOptions options, QWidget* parent)
@@ -79,6 +83,18 @@ MainWindow::MainWindow(MainWindowOptions options, QWidget* parent)
 	connect(m_workspace.get(), &viewmodels::Workspace::openGroupMonitorRequested, this, &MainWindow::openGroupMonitor);
 	connect(m_workspace->actions(), &viewmodels::ActionRegistry::contextMenuRequested, this, &MainWindow::showContextMenu);
 	connect(m_workspace->welcome(), &viewmodels::WelcomeVM::openRequested, this, &MainWindow::openProject);
+	connect(m_workspace.get(), &viewmodels::Workspace::importCatalogRequested, this, &MainWindow::chooseAndImportProducts);
+	connect(m_workspace.get(), &viewmodels::Workspace::showBusConnectionRequested, this,
+		[this] { showDock(u"dock.busConnection"_s); });
+	connect(m_workspace->commissioning(), &viewmodels::CommissioningVM::operationStarted, this,
+		[this] { showDock(u"dock.commissioning"_s); });
+	connect(m_workspace->commissioning(), &viewmodels::CommissioningVM::operationChanged, this,
+		[this]
+		{
+			viewmodels::CommissioningVM* c = m_workspace->commissioning();
+			if (!c->isOperationActive() && !c->lastResult().isEmpty())
+				statusBar()->showMessage(c->lastResult(), 8000);
+		});
 
 	resize(1280, 800);
 	if (m_options.persistLayout)
@@ -182,23 +198,18 @@ void MainWindow::createMenus()
 	m_projectMenu->setObjectName(u"menu.project"_s);
 	add(m_projectMenu,
 		{u"building.addBuilding"_s, u"building.addFloor"_s, u"building.addRoom"_s, sep, u"topology.addArea"_s,
-			u"topology.addLine"_s, u"topology.addDevice"_s, sep, u"ga.addMainGroup"_s, u"ga.addMiddleGroup"_s,
-			u"ga.addAddress"_s, sep, u"device.open"_s});
+			u"topology.addLine"_s, u"topology.addDevice"_s, sep, u"catalog.import"_s, u"catalog.addToLine"_s, sep,
+			u"ga.addMainGroup"_s, u"ga.addMiddleGroup"_s, u"ga.addAddress"_s, sep, u"device.open"_s});
 
 	m_busMenu = menuBar()->addMenu(tr("&Bus"));
 	m_busMenu->setObjectName(u"menu.bus"_s);
-	QAction* showConnection = m_busMenu->addAction(tr("&Connect…"));
-	showConnection->setObjectName(u"bus.connect"_s);
-	connect(showConnection, &QAction::triggered, this,
-		[this]
-		{
-			QmlDock* bus = dock(u"dock.busConnection"_s);
-			bus->show();
-			bus->raise();
-		});
-	add(m_busMenu,
-		{u"bus.disconnect"_s, sep, u"bus.groupMonitor"_s, sep, u"device.programAddress"_s, u"device.readInfo"_s,
-			u"device.cancelProgramming"_s});
+	add(m_busMenu, {u"bus.connect"_s, u"bus.discover"_s, u"bus.disconnect"_s, sep, u"bus.groupMonitor"_s});
+
+	m_commissioningMenu = menuBar()->addMenu(tr("&Commissioning"));
+	m_commissioningMenu->setObjectName(u"menu.commissioning"_s);
+	add(m_commissioningMenu,
+		{u"device.programAddress"_s, u"device.download"_s, u"device.readInfo"_s, sep, u"bus.programmingMode"_s, sep,
+			u"device.cancelOperation"_s});
 
 	m_helpMenu = menuBar()->addMenu(tr("&Help"));
 	m_helpMenu->setObjectName(u"menu.help"_s);
@@ -208,7 +219,7 @@ void MainWindow::createMenus()
 	toolBar->setObjectName(u"toolbar.main"_s);
 	toolBar->setToolButtonStyle(Qt::ToolButtonFollowStyle);
 	for (const QString& id : {u"file.new"_s, u"file.open"_s, u"file.save"_s, sep, u"edit.undo"_s, u"edit.redo"_s, sep,
-			 u"edit.delete"_s})
+			 u"edit.delete"_s, sep, u"catalog.addToLine"_s, sep, u"device.programAddress"_s, u"device.download"_s})
 	{
 		if (id == sep)
 			toolBar->addSeparator();
@@ -233,6 +244,8 @@ void MainWindow::createDocks()
 	addQmlDock(u"dock.properties"_s, tr("Properties"), u"PropertiesPanel"_s, m_workspace->properties());
 	addQmlDock(u"dock.problems"_s, tr("Problems"), u"ProblemsPanel"_s, m_workspace->problems());
 
+	addQmlDock(u"dock.catalog"_s, tr("Catalog"), u"CatalogPanel"_s, m_workspace->catalogPanel());
+	addQmlDock(u"dock.commissioning"_s, tr("Commissioning"), u"CommissioningPanel"_s, m_workspace->commissioning());
 	addQmlDock(u"dock.busConnection"_s, tr("Bus Connection"), u"BusConnectionPanel"_s, m_workspace->busConnection());
 }
 
@@ -269,19 +282,23 @@ void MainWindow::resetLayout()
 	QmlDock* properties = dock(u"dock.properties"_s);
 	QmlDock* problems = dock(u"dock.problems"_s);
 	QmlDock* bus = dock(u"dock.busConnection"_s);
+	QmlDock* catalog = dock(u"dock.catalog"_s);
+	QmlDock* commissioning = dock(u"dock.commissioning"_s);
 
 	addDockWidget(Qt::LeftDockWidgetArea, topology);
 	tabifyDockWidget(topology, buildings);
 	tabifyDockWidget(topology, groupAddresses);
 	addDockWidget(Qt::RightDockWidgetArea, properties);
 	addDockWidget(Qt::BottomDockWidgetArea, problems);
+	tabifyDockWidget(problems, catalog);
+	tabifyDockWidget(problems, commissioning);
 	tabifyDockWidget(problems, bus);
 	for (QmlDock* d : std::as_const(m_docks))
 		d->setVisible(true);
 	topology->raise();
 	problems->raise();
 	resizeDocks({topology, properties}, {340, 300}, Qt::Horizontal);
-	resizeDocks({problems}, {170}, Qt::Vertical);
+	resizeDocks({problems}, {220}, Qt::Vertical);
 }
 
 void MainWindow::restoreLayout()
@@ -330,6 +347,31 @@ void MainWindow::showContextMenu(const QStringList& ids)
 		return;
 	}
 	menu->popup(QCursor::pos());
+}
+
+void MainWindow::showDock(const QString& id)
+{
+	if (QmlDock* d = dock(id))
+	{
+		d->show();
+		d->raise();
+	}
+}
+
+void MainWindow::chooseAndImportProducts()
+{
+	QSettings settings;
+	const QStringList files = QFileDialog::getOpenFileNames(this, tr("Import Product Files"),
+		settings.value(kImportDirKey, QDir::homePath()).toString(), tr("KNX product files (*.knxprod);;All files (*)"));
+	if (files.isEmpty())
+		return;
+	settings.setValue(kImportDirKey, QFileInfo(files.constFirst()).absolutePath());
+	showDock(u"dock.catalog"_s);
+	viewmodels::CatalogPanelVM* catalog = m_workspace->catalogPanel();
+	if (catalog->importFiles(files))
+		statusBar()->showMessage(tr("Importing %n product file(s)…", nullptr, static_cast<int>(files.size())), 4000);
+	else
+		statusBar()->showMessage(catalog->lastError(), 8000);
 }
 
 bool MainWindow::maybeSave()
