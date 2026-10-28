@@ -47,7 +47,6 @@ public:
 	struct Finished
 	{
 		Status status;
-		friend bool operator==(const Finished&, const Finished&) = default;
 	};
 	using Action = std::variant<SendFrame, Progress, Finished>;
 

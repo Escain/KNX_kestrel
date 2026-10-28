@@ -219,7 +219,7 @@ Result<QString> readParameter(const Bytes& segment, const catalog::ParameterType
 		}
 		if (width == 32)
 		{
-			return formatDouble(std::bit_cast<float>(static_cast<std::uint32_t>(raw)));
+			return formatDouble(static_cast<double>(std::bit_cast<float>(static_cast<std::uint32_t>(raw))));
 		}
 		return formatDouble(std::bit_cast<double>(raw));
 	}
