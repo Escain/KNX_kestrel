@@ -43,3 +43,8 @@
       choose/when), group object table, address and association tables. Acceptance test: the bytes are
       identical to the ETS6 images.
 - [ ] Push-button sensor: catalog, links to 1/0/6 and 2/0/6, download.
+- [x] appconfig: DynamicEvaluator, parameter codec, System B images identical to ETS6 (specs/09).
+- [x] `appconfig::planDeviceDownload` (project device → plan) and `importSystemBImages` (device → project).
+- [x] `kestrel-cli device import <ia>` (read-only: device configuration → project) and
+      `kestrel-cli project download <dir> <device>` (`--dry-run`, `--save-images`). The real KAA-8R was imported
+      into a private project; the images regenerated from it are identical to the ETS6 ones.

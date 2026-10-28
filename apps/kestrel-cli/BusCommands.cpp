@@ -4,7 +4,11 @@
 
 #include "kestrel/app/BusSession.hpp"
 #include "kestrel/base/Bytes.hpp"
+#include "kestrel/appconfig/DownloadPlan.hpp"
+#include "kestrel/appconfig/Import.hpp"
 #include "kestrel/catalog/Knxprod.hpp"
+#include "kestrel/model/Operations.hpp"
+#include "kestrel/persist/Persist.hpp"
 #include "kestrel/download/Resolver.hpp"
 #include "kestrel/dpt/Dpt.hpp"
 #include "kestrel/knx/Address.hpp"
@@ -788,21 +792,6 @@ int deviceObjects(Invocation& inv)
 		});
 }
 
-std::vector<download::LdCtrl> toLdCtrls(const std::vector<catalog::LoadControl>& controls)
-{
-	std::vector<download::LdCtrl> out;
-	for (const catalog::LoadControl& control : controls)
-	{
-		download::LdCtrl element{control.element.toStdString(), {}};
-		for (const auto& [name, value] : control.attributes)
-		{
-			element.attributes[name.toStdString()] = value.toStdString();
-		}
-		out.push_back(std::move(element));
-	}
-	return out;
-}
-
 /// Builds the download plan from the options; prints the reason and returns nullopt on failure.
 std::optional<download::Plan> downloadPlan(Invocation& inv, int& exitCode)
 {
@@ -834,39 +823,7 @@ std::optional<download::Plan> downloadPlan(Invocation& inv, int& exitCode)
 	{
 		return fail(u"choose the application program with --application"_s, u"Usage"_s, kExitUsage);
 	}
-	if (program->loadProcedureStyle != u"MergedProcedure")
-	{
-		return fail(u"load procedure style %1 is not supported yet"_s.arg(program->loadProcedureStyle), u"Unsupported"_s,
-			kExitFindings);
-	}
-	const catalog::MaskVersionInfo* mask = database.findMaskVersion(program->maskVersion);
-	const QString subType = inv.value(u"procedure"_s);
-	const catalog::MaskProcedure* procedure = mask ? mask->procedure(u"Load", subType) : nullptr;
-	if (!procedure)
-	{
-		QStringList available;
-		for (const catalog::MaskProcedure& candidate : mask ? mask->procedures : std::vector<catalog::MaskProcedure>{})
-		{
-			available.append(candidate.type + u':' + candidate.subType);
-		}
-		return fail(u"no Load procedure \"%1\" for %2 in the product file's knx_master.xml (masks: %3; procedures: %4)"_s
-						.arg(subType, program->maskVersion)
-						.arg(database.maskVersions.size())
-						.arg(available.join(u", ")),
-			u"NotFound"_s, kExitFindings);
-	}
-
-	download::ResolveInput input;
-	input.procedure = toLdCtrls(procedure->controls);
-	for (const catalog::LoadProcedure& merge : program->loadProcedures)
-	{
-		if (merge.mergeId)
-		{
-			auto& list = input.merges[static_cast<int>(*merge.mergeId)];
-			const auto controls = toLdCtrls(merge.controls);
-			list.insert(list.end(), controls.begin(), controls.end());
-		}
-	}
+	std::map<std::uint8_t, Bytes> images;
 	// Images: files named obj<N>... in the --images directory (e.g. "obj4-application@2a18.bin").
 	const QDir dir(inv.value(u"images"_s));
 	const QStringList files = dir.entryList({u"obj*"_s}, QDir::Files, QDir::Name);
@@ -889,9 +846,9 @@ std::optional<download::Plan> downloadPlan(Invocation& inv, int& exitCode)
 			return fail(u"cannot read %1"_s.arg(file.fileName()), u"IoError"_s, kExitFindings);
 		}
 		const QByteArray content = file.readAll();
-		input.images[static_cast<std::uint8_t>(object)] = Bytes(content.begin(), content.end());
+		images[static_cast<std::uint8_t>(object)] = Bytes(content.begin(), content.end());
 	}
-	if (input.images.empty())
+	if (images.empty())
 	{
 		return fail(u"no obj<N>* image files in %1"_s.arg(dir.path()), u"NotFound"_s, kExitFindings);
 	}
@@ -908,16 +865,12 @@ std::optional<download::Plan> downloadPlan(Invocation& inv, int& exitCode)
 	}
 	else
 	{
-		const uint manufacturer = database.manufacturerId.mid(2).toUInt(nullptr, 16);
-		version = {static_cast<std::uint8_t>(manufacturer >> 8), static_cast<std::uint8_t>(manufacturer),
-			static_cast<std::uint8_t>(program->applicationNumber >> 8),
-			static_cast<std::uint8_t>(program->applicationNumber), static_cast<std::uint8_t>(program->applicationVersion)};
+		version = appconfig::programVersion(database.manufacturerId, *program);
 	}
-	input.programVersions[4] = version;
-	auto plan = download::resolve(input);
+	auto plan = appconfig::planDownload(database, *program, std::move(images), version, inv.value(u"procedure"_s));
 	if (!plan)
 	{
-		return fail(qs(plan.error().message), u"InvalidArgument"_s, kExitFindings);
+		return fail(qs(plan.error().message), QString::fromLatin1(toString(plan.error().code)), kExitFindings);
 	}
 	return std::move(*plan);
 }
@@ -967,6 +920,377 @@ int deviceDownload(Invocation& inv)
 		});
 }
 
+/// The one application program of the product file, or the one chosen with --application.
+const catalog::ApplicationProgram* chooseProgram(Invocation& inv, const catalog::ProductDatabase& database,
+	const QString& wanted = {})
+{
+	if (!wanted.isEmpty())
+	{
+		return database.findApplicationProgram(wanted);
+	}
+	if (inv.isSet(u"application"_s))
+	{
+		return database.findApplicationProgram(inv.value(u"application"_s));
+	}
+	return database.applicationPrograms.size() == 1 ? &database.applicationPrograms.front() : nullptr;
+}
+
+/// A product of `database` whose hardware lists `app`.
+QString productFor(const catalog::ProductDatabase& database, const catalog::ApplicationProgram& app)
+{
+	for (const catalog::Hardware& hardware : database.hardware)
+	{
+		for (const catalog::Hardware2Program& h2p : hardware.hardware2Programs)
+		{
+			if (h2p.applicationProgramRefs.contains(app.id) && !hardware.products.empty())
+			{
+				return hardware.products.front().id;
+			}
+		}
+	}
+	return {};
+}
+
+std::uint32_t beValue(const QByteArray& bytes, qsizetype count)
+{
+	std::uint32_t value = 0;
+	for (qsizetype i = 0; i < std::min(count, bytes.size()); ++i)
+	{
+		value = (value << 8) | static_cast<std::uint8_t>(bytes[i]);
+	}
+	return value;
+}
+
+int deviceImport(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto address = parseIa(inv, inv.args[0], exitCode);
+	if (!address)
+	{
+		return exitCode;
+	}
+	if (!inv.isSet(u"knxprod"_s) || !inv.isSet(u"project"_s))
+	{
+		return inv.out.failure(kExitUsage, u"--knxprod and --project are required"_s, u"Usage"_s);
+	}
+	auto loaded = catalog::loadKnxprodFile(inv.value(u"knxprod"_s));
+	if (!loaded)
+	{
+		return inv.out.failure(kExitFindings, loaded.error());
+	}
+	const catalog::ProductDatabase& database = loaded->database;
+	const catalog::ApplicationProgram* app = chooseProgram(inv, database);
+	if (!app)
+	{
+		return inv.out.failure(kExitUsage, u"choose the application program with --application"_s, u"Usage"_s);
+	}
+	if (app->maskVersion != u"MV-07B0")
+	{
+		return inv.out.failure(kExitFindings, u"only System B (MV-07B0) devices can be imported yet"_s, u"Unsupported"_s);
+	}
+	const QString projectDir = inv.value(u"project"_s);
+	auto project = persist::load(projectDir);
+	if (!project)
+	{
+		return inv.out.failure(kExitIo, project.error());
+	}
+
+	std::map<std::uint8_t, Bytes> images;
+	QStringList notes;
+	const int busCode = withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			// 1. Where and how large the segments are: PID_TABLE_REFERENCE and PID_MCB_TABLE of objects 1..4.
+			QList<app::ManagementRead> reads;
+			for (std::uint8_t object = 1; object <= 4; ++object)
+			{
+				reads.append(app::ManagementRead::property(object, 7));
+				reads.append(app::ManagementRead::property(object, 27));
+			}
+			reads.append(app::ManagementRead::property(4, 13));
+			session.readManagement(*address, reads,
+				[&, finish](Result<QList<Result<QByteArray>>> results)
+				{
+					if (!results)
+					{
+						finish(inv.out.failure(busExitCode(results.error()), results.error()));
+						return;
+					}
+					const auto& r = *results;
+					if (r[8])
+					{
+						const QByteArray version = *r[8];
+						const Bytes expected = appconfig::programVersion(database.manufacturerId, *app);
+						if (version.size() == 5 && (static_cast<std::uint8_t>(version[2]) != expected[2]
+								|| static_cast<std::uint8_t>(version[3]) != expected[3]))
+						{
+							finish(inv.out.failure(kExitFindings,
+								u"the device runs application %1, not %2"_s.arg(QString::fromLatin1(version.toHex(' ')),
+									app->id),
+								u"Conflict"_s));
+							return;
+						}
+						if (version.size() == 5 && static_cast<std::uint8_t>(version[4]) != expected[4])
+						{
+							notes.append(u"the device has application version %1, the product file %2"_s
+									.arg(static_cast<std::uint8_t>(version[4]), 2, 16, QLatin1Char('0'))
+									.arg(expected[4], 2, 16, QLatin1Char('0')));
+						}
+					}
+					QList<app::ManagementRead> memory;
+					for (int object = 0; object < 4; ++object)
+					{
+						if (!r[2 * object] || !r[2 * object + 1])
+						{
+							finish(inv.out.failure(kExitBus, u"object %1: table reference or MCB not readable"_s
+															 .arg(object + 1),
+								u"ProtocolError"_s));
+							return;
+						}
+						const std::uint32_t where = beValue(*r[2 * object], 4);
+						const std::uint32_t size = beValue(*r[2 * object + 1], 4);
+						if (where + size > 0x10000 || size == 0)
+						{
+							finish(inv.out.failure(kExitBus, u"object %1: segment 0x%2 size %3 not readable"_s
+															 .arg(object + 1)
+															 .arg(where, 0, 16)
+															 .arg(size),
+								u"Unsupported"_s));
+							return;
+						}
+						memory.append(app::ManagementRead::memory(static_cast<std::uint16_t>(where),
+							static_cast<std::uint16_t>(size)));
+					}
+					// 2. The segments themselves.
+					session.readManagement(*address, memory,
+						[&, finish](Result<QList<Result<QByteArray>>> data)
+						{
+							if (!data)
+							{
+								finish(inv.out.failure(busExitCode(data.error()), data.error()));
+								return;
+							}
+							for (int object = 0; object < 4; ++object)
+							{
+								if (!(*data)[object])
+								{
+									finish(inv.out.failure(busExitCode((*data)[object].error()), (*data)[object].error()));
+									return;
+								}
+								const QByteArray& bytes = *(*data)[object];
+								images[static_cast<std::uint8_t>(object + 1)] = Bytes(bytes.begin(), bytes.end());
+							}
+							finish(kExitOk);
+						});
+				});
+		});
+	if (busCode != kExitOk)
+	{
+		return busCode;
+	}
+
+	// 3. Into the project: area, line and device (created when missing), then the configuration.
+	model::Project& p = *project;
+	const unsigned areaNumber = address->area(), lineNumber = address->line(), deviceNumber = address->device();
+	std::optional<model::Id<model::Device>> deviceId;
+	const Status placed = p.edit(u"Import device %1"_s.arg(qs(address->toString())),
+		[&](model::Tx&) -> Status
+		{
+			std::optional<model::Id<model::Area>> area;
+			for (const model::Area& candidate : p.areas().rows())
+			{
+				if (candidate.number == areaNumber)
+				{
+					area = candidate.id;
+				}
+			}
+			if (!area)
+			{
+				KESTREL_TRY(const auto created, model::addArea(p, areaNumber, u"Area %1"_s.arg(areaNumber)));
+				area = created;
+			}
+			std::optional<model::Id<model::Line>> line;
+			for (const model::Line& candidate : p.lines().rows())
+			{
+				if (candidate.area == *area && candidate.number == lineNumber)
+				{
+					line = candidate.id;
+				}
+			}
+			if (!line)
+			{
+				KESTREL_TRY(const auto created,
+					model::addLine(p, *area, lineNumber, u"Line %1.%2"_s.arg(areaNumber).arg(lineNumber)));
+				line = created;
+			}
+			for (const model::Device& candidate : p.devices().rows())
+			{
+				if (candidate.line == *line && candidate.number == deviceNumber)
+				{
+					if (candidate.appProgramRef != app->id)
+					{
+						return makeError(ErrorCode::Conflict, "device " + address->toString()
+								+ " exists in the project with another application");
+					}
+					deviceId = candidate.id;
+				}
+			}
+			if (!deviceId)
+			{
+				const QString product = productFor(database, *app);
+				const catalog::Product* info = database.findProduct(product);
+				const QString name = inv.isSet(u"name"_s) ? inv.value(u"name"_s)
+					: info ? database.text(info->id, u"Text"_s, {})
+						   : app->name;
+				KESTREL_TRY(const auto created, model::addDevice(p, *line, deviceNumber, name, product, app->id));
+				deviceId = created;
+			}
+			return ok();
+		});
+	if (!placed)
+	{
+		return inv.out.failure(kExitFindings, placed.error());
+	}
+	auto warnings = appconfig::importSystemBImages(p, *deviceId, *app, images);
+	if (!warnings)
+	{
+		return inv.out.failure(kExitFindings, warnings.error());
+	}
+	notes += *warnings;
+	if (const int saved = [&]
+		{
+			const Status status = persist::save(p, projectDir);
+			return status ? kExitOk : inv.out.failure(kExitIo, status.error());
+		}();
+		saved != kExitOk)
+	{
+		return saved;
+	}
+	const model::Device& device = p.devices().at(*deviceId);
+	std::size_t objects = 0, links = 0;
+	for (const model::ComObject& object : p.comObjects().rows())
+	{
+		if (object.device == *deviceId)
+		{
+			++objects;
+			for (const model::Link& link : p.links().rows())
+			{
+				links += link.comObject == object.id ? 1u : 0u;
+			}
+		}
+	}
+	for (const QString& note : std::as_const(notes))
+	{
+		inv.out.note(u"note: "_s + note);
+	}
+	return inv.out.success(
+		{{u"device"_s, device.id.toString()}, {u"address"_s, qs(address->toString())},
+			{u"parameters"_s, static_cast<int>(device.params.size())}, {u"comObjects"_s, static_cast<int>(objects)},
+			{u"links"_s, static_cast<int>(links)}},
+		u"imported %1 into %2: %3 parameter values, %4 com objects, %5 links (device id %6)"_s.arg(
+			qs(address->toString()), projectDir)
+			.arg(device.params.size())
+			.arg(objects)
+			.arg(links)
+			.arg(device.id.toString()));
+}
+
+int projectDownload(Invocation& inv)
+{
+	const QString projectDir = inv.args[0];
+	auto project = persist::load(projectDir);
+	if (!project)
+	{
+		return inv.out.failure(kExitIo, project.error());
+	}
+	const auto deviceId = model::Id<model::Device>::parse(inv.args[1]);
+	const model::Device* device = deviceId ? project->devices().find(*deviceId) : nullptr;
+	if (!device)
+	{
+		return inv.out.failure(kExitFindings, u"no device %1 in the project"_s.arg(inv.args[1]), u"NotFound"_s);
+	}
+	if (!device->number)
+	{
+		return inv.out.failure(kExitFindings, u"the device has no individual address yet"_s, u"InvalidArgument"_s);
+	}
+	const model::Line& line = project->lines().at(device->line);
+	const model::Area& area = project->areas().at(line.area);
+	const auto address = knx::IndividualAddress::fromParts(area.number, line.number, *device->number);
+	if (!address)
+	{
+		return inv.out.failure(kExitFindings, address.error());
+	}
+	if (!inv.isSet(u"knxprod"_s))
+	{
+		return inv.out.failure(kExitUsage, u"--knxprod is required (the device's product file)"_s, u"Usage"_s);
+	}
+	auto loaded = catalog::loadKnxprodFile(inv.value(u"knxprod"_s));
+	if (!loaded)
+	{
+		return inv.out.failure(kExitFindings, loaded.error());
+	}
+	const catalog::ApplicationProgram* app = loaded->database.findApplicationProgram(device->appProgramRef);
+	if (!app)
+	{
+		return inv.out.failure(kExitFindings,
+			u"the product file does not contain the device's application %1"_s.arg(device->appProgramRef), u"NotFound"_s);
+	}
+	auto planned = appconfig::planDeviceDownload(loaded->database, *app, *project, *deviceId, inv.value(u"procedure"_s));
+	if (!planned)
+	{
+		return inv.out.failure(kExitFindings, planned.error());
+	}
+	for (const QString& warning : std::as_const(planned->warnings))
+	{
+		inv.out.note(u"warning: "_s + warning);
+	}
+	if (inv.isSet(u"save-images"_s))
+	{
+		const QDir dir(inv.value(u"save-images"_s));
+		(void)QDir().mkpath(dir.path());
+		for (const auto& [object, image] : planned->images)
+		{
+			QFile file(dir.filePath(u"obj%1.bin"_s.arg(object)));
+			if (!file.open(QIODevice::WriteOnly)
+				|| file.write(reinterpret_cast<const char*>(image.data()), static_cast<qint64>(image.size()))
+					!= static_cast<qint64>(image.size()))
+			{
+				return inv.out.failure(kExitIo, u"cannot write %1"_s.arg(file.fileName()), u"IoError"_s);
+			}
+		}
+	}
+	QJsonArray steps;
+	QStringList lines;
+	for (std::size_t i = 0; i < planned->plan.steps.size(); ++i)
+	{
+		std::ostringstream os;
+		os << planned->plan.steps[i];
+		steps.append(qs(os.str()));
+		lines.append(u"%1  %2"_s.arg(i + 1, 2).arg(qs(os.str())));
+	}
+	if (inv.isSet(u"dry-run"_s))
+	{
+		return inv.out.success({{u"address"_s, qs(address->toString())}, {u"steps"_s, steps}}, lines.join(u'\n'));
+	}
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.download(*address, planned->plan,
+				[&, finish](Status status)
+				{
+					if (!status)
+					{
+						finish(inv.out.failure(busExitCode(status.error()), status.error()));
+						return;
+					}
+					finish(inv.out.success({{u"address"_s, qs(address->toString())}, {u"steps"_s, steps}},
+						u"download to %1 completed (%2 steps)"_s.arg(qs(address->toString())).arg(steps.size())));
+				},
+				[&](std::size_t step, std::size_t total, const QString& text)
+				{ inv.out.note(u"  [%1/%2] %3"_s.arg(step + 1).arg(total).arg(text)); });
+		});
+}
+
 } // namespace
 
 std::vector<Command> busCommands()
@@ -994,6 +1318,10 @@ std::vector<Command> busCommands()
 	const QCommandLineOption programVersion(u"program-version"_s,
 		u"PID_PROGRAM_VERSION to write (5 hex octets; default from the application)."_s, u"hex"_s);
 	const QCommandLineOption dryRun(u"dry-run"_s, u"Print the resolved steps and stop (no bus access)."_s);
+	const QCommandLineOption projectOption(u"project"_s, u"Project folder to add the device to."_s, u"dir"_s);
+	const QCommandLineOption nameOption(u"name"_s, u"Device name (default: the product text)."_s, u"name"_s);
+	const QCommandLineOption saveImages(u"save-images"_s, u"Also write the generated segment images (obj<N>.bin)."_s,
+		u"dir"_s);
 	const QCommandLineOption progModeTimeout(u"timeout"_s, u"Seconds to collect answers (default 3)."_s, u"s"_s, u"3"_s);
 	const QCommandLineOption overwrite(u"overwrite"_s, u"Program even if another device already uses the address."_s);
 
@@ -1021,6 +1349,12 @@ std::vector<Command> busCommands()
 		{{u"device"_s, u"download"_s}, {u"ia"_s},
 			u"Download segment images with the product file's load procedure (FR-COM-2). Writes to the device!"_s,
 			{kInterfaceOption, knxprod, images, application, procedure, programVersion, dryRun}, deviceDownload},
+		{{u"device"_s, u"import"_s}, {u"ia"_s},
+			u"Read a configured System B device (read-only) and add its configuration to a project (FR-DEV-3)."_s,
+			{kInterfaceOption, knxprod, projectOption, application, nameOption}, deviceImport},
+		{{u"project"_s, u"download"_s}, {u"dir"_s, u"device-id"_s},
+			u"Generate a device's configuration from the project and download it (FR-COM-2). Writes to the device!"_s,
+			{kInterfaceOption, knxprod, procedure, dryRun, saveImages}, projectDownload},
 		{{u"device"_s, u"progmode"_s}, {},
 			u"List the addresses of the devices in programming mode (read-only; FR-COM-1)."_s,
 			{kInterfaceOption, progModeTimeout}, deviceProgMode},

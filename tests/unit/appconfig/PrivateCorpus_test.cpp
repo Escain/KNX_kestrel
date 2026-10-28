@@ -2,7 +2,10 @@
 // points to a directory with meanwell/KAA-8R_R21.knxprod and meanwell/backup-15.15.2-*/obj<N>*.bin, the
 // segments ETS6 downloaded to a MEAN WELL KAA-8R. Kestrel must rebuild all four segments byte for byte.
 
+#include "kestrel/appconfig/DownloadPlan.hpp"
 #include "kestrel/appconfig/Images.hpp"
+#include "kestrel/appconfig/Import.hpp"
+#include "kestrel/model/Operations.hpp"
 #include "kestrel/catalog/Knxprod.hpp"
 
 #include <Printers.hpp>
@@ -87,4 +90,19 @@ UNIT_TEST(FR_DEV_2__rebuildsEts6ImagesOfRealDevice)
 		ASSERT_EQ(toHex(rebuilt->images.at(object)), toHex(golden.at(object)));
 	}
 	ASSERT_EQ(programVersion(loaded->database.manufacturerId, app), fromHex("01 62 00 01 21").value());
+
+	// The same through a project: import the device, plan its download, compare the planned images.
+	model::Project project(model::IdGenerator::sequential());
+	const auto area = model::addArea(project, 15, u"Area"_s).value();
+	const auto line = model::addLine(project, area, 15, u"Line"_s).value();
+	const auto device = model::addDevice(project, line, 2, u"KAA-8R"_s, u"M-0162_H-KAA.2D8R-1_P-KAA.2D8R"_s, app.id).value();
+	ASSERT(importSystemBImages(project, device, app, golden).has_value());
+	ASSERT_EQ(project.links().rows().size(), std::size_t{18});
+	const auto planned = planDeviceDownload(loaded->database, app, project, device);
+	ASSERT(planned.has_value());
+	for (const std::uint8_t object : {std::uint8_t{1}, std::uint8_t{2}, std::uint8_t{3}, std::uint8_t{4}})
+	{
+		ASSERT_EQ(toHex(planned->images.at(object)), toHex(golden.at(object)));
+	}
+	ASSERT_EQ(planned->plan.steps.size(), std::size_t{28});
 }

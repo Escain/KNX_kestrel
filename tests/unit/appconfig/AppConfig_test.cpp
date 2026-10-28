@@ -1,4 +1,7 @@
+#include "kestrel/appconfig/DeviceImages.hpp"
 #include "kestrel/appconfig/Images.hpp"
+#include "kestrel/appconfig/Import.hpp"
+#include "kestrel/model/Operations.hpp"
 
 #include <Printers.hpp>
 #include <QtPrinters.hpp>
@@ -238,4 +241,35 @@ UNIT_TEST(FR_COM_2__groupObjectTableAndTables)
 	ASSERT_EQ(unlinked.images.at(3), hex("00 04 13 00 4b 00 00 00 00 00"));
 	ASSERT_EQ(unlinked.images.at(1), hex("00 00"));
 	ASSERT_EQ(programVersion(u"M-0162"_s, app), hex("01 62 00 01 10"));
+}
+
+UNIT_TEST(FR_DEV_3__importedDeviceRegeneratesItsImages)
+{
+	// Import segment images into a project device, then build them again from the project.
+	const auto app = testProgram();
+	const ParameterValues values{{u"P-Mode"_s, u"1"_s}, {u"P-FuncA"_s, u"1"_s}, {u"P-Invert"_s, u"1"_s}};
+	const Links links{{1, {0x0806}}, {2, {0x1006, 0x0806}}};
+	const auto original = buildSystemB(app, values, links).value();
+
+	model::Project project(model::IdGenerator::sequential());
+	const auto area = model::addArea(project, 15, u"Area"_s).value();
+	const auto line = model::addLine(project, area, 15, u"Line"_s).value();
+	const auto device = model::addDevice(project, line, 2, u"Actuator"_s, u"P-1"_s, app.id).value();
+	const auto warnings = importSystemBImages(project, device, app, original.images);
+	ASSERT(warnings.has_value());
+	ASSERT_EQ(project.comObjects().rows().size(), std::size_t{2});
+	ASSERT_EQ(project.groupAddresses().rows().size(), std::size_t{2});
+	ASSERT_EQ(project.links().rows().size(), std::size_t{3});
+	ASSERT(project.history().canUndo());
+
+	const auto configuration = deviceConfiguration(project, device, app).value();
+	ASSERT_EQ(configuration.values, values);
+	ASSERT_EQ(configuration.links, links);
+	const auto rebuilt = buildSystemB(app, configuration.values, configuration.links).value();
+	ASSERT_EQ(rebuilt.images, original.images);
+
+	// One undo step removes the import again.
+	ASSERT(project.history().undo());
+	ASSERT(project.comObjects().rows().empty());
+	ASSERT(project.devices().at(device).params.empty());
 }
