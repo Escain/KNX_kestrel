@@ -1,0 +1,30 @@
+// Windows resources of kestrel.exe: the application icon (Explorer, taskbar) and the version shown in the file's
+// properties. Configured by apps/kestrel/CMakeLists.txt. Plain numbers instead of <winver.h>: VOS_NT_WINDOWS32 is
+// 0x40004, VFT_APP is 1.
+
+IDI_ICON1 ICON "@CMAKE_CURRENT_SOURCE_DIR@/kestrel.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEOS 0x40004L
+FILETYPE 0x1L
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040904B0"
+		BEGIN
+			VALUE "CompanyName", "Kestrel"
+			VALUE "FileDescription", "Kestrel - @PROJECT_DESCRIPTION@"
+			VALUE "FileVersion", "@PROJECT_VERSION@"
+			VALUE "InternalName", "kestrel"
+			VALUE "OriginalFilename", "kestrel.exe"
+			VALUE "ProductName", "Kestrel"
+			VALUE "ProductVersion", "@PROJECT_VERSION@"
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x0409, 1200
+	END
+END
