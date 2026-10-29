@@ -41,7 +41,7 @@ Pane {
 				Accessible.name: qsTr("Filter products")
 				Layout.fillWidth: true
 				Layout.maximumWidth: 360
-				placeholderText: qsTr("Filter: product, order number, application…")
+				placeholderText: qsTr("Search: brand, product, order number…")
 				text: root.vm.filter
 				onTextEdited: root.vm.filter = text
 			}
@@ -73,15 +73,19 @@ Pane {
 			id: header
 			objectName: "catalog.header"
 			Layout.fillWidth: true
+			visible: productsArea.visible
 			syncView: table
 			clip: true
 			delegate: HeaderCell {}
 		}
 
 		Item {
+			id: productsArea
 			Layout.fillWidth: true
 			Layout.fillHeight: true
 			Layout.minimumHeight: 60
+			// Nothing imported matches but the index does: the space goes to the products to download.
+			visible: !(table.rows === 0 && indexSection.visible && !root.vm.busy)
 
 			TableView {
 				id: table
@@ -166,8 +170,148 @@ Pane {
 				wrapMode: Text.Wrap
 				color: Theme.textSecondary
 				text: root.vm.busy ? qsTr("Reading product files…")
-					: root.vm.productCount === 0 ? qsTr("No products yet. Use “Import Product File…” to add a manufacturer's .knxprod file.")
+					: root.vm.productCount === 0 ? qsTr("No products yet. Download one below, or use “Import Product File…” for a .knxprod you have.")
 					: qsTr("No product matches the filter.")
+			}
+		}
+
+		// Products of the product index matching the filter: their files are downloaded from the manufacturer.
+		ColumnLayout {
+			id: indexSection
+			objectName: "catalog.index"
+			Layout.fillWidth: true
+			Layout.fillHeight: !productsArea.visible
+			// Rows are 48 px; at most about half the panel.
+			Layout.preferredHeight: Math.min(root.vm.indexCount * 48 + indexHeading.implicitHeight + 13,
+				Math.max(120, root.height * 0.5))
+			visible: root.vm.indexCount > 0 && (root.vm.filter !== "" || root.vm.productCount === 0)
+			spacing: 0
+
+			Rectangle {
+				Layout.fillWidth: true
+				implicitHeight: 1
+				color: Theme.border
+			}
+			SectionLabel {
+				id: indexHeading
+				Layout.leftMargin: 10
+				Layout.topMargin: 8
+				Layout.bottomMargin: 4
+				text: qsTr("From manufacturers (%n)", "", root.vm.indexCount)
+			}
+			ListView {
+				id: indexList
+				objectName: "catalog.indexList"
+				Accessible.name: qsTr("Products to download")
+				Accessible.role: Accessible.List
+				Layout.fillWidth: true
+				Layout.fillHeight: true
+				Layout.minimumHeight: 48
+				clip: true
+				boundsBehavior: Flickable.StopAtBounds
+				model: root.vm.indexModel
+				ScrollBar.vertical: ScrollBar {}
+
+				delegate: Rectangle {
+					id: entry
+
+					required property int index
+					required property string product
+					required property string manufacturer
+					required property string orderNumber
+					required property string category
+					required property string mask
+					required property bool deviceDownload
+					required property string state
+					required property real progress
+
+					width: indexList.width
+					implicitHeight: 48
+					color: Theme.panel
+					Accessible.name: entry.manufacturer + " " + entry.product
+
+					Rectangle {
+						anchors.left: parent.left
+						anchors.right: parent.right
+						anchors.bottom: parent.bottom
+						height: 1
+						color: Theme.border
+						opacity: 0.6
+					}
+
+					RowLayout {
+						anchors.fill: parent
+						anchors.leftMargin: 10
+						anchors.rightMargin: 10
+						spacing: 10
+
+						ColumnLayout {
+							Layout.fillWidth: true
+							spacing: 1
+
+							Label {
+								Layout.fillWidth: true
+								text: entry.product
+								font.weight: Font.Medium
+								elide: Text.ElideRight
+							}
+							Label {
+								Layout.fillWidth: true
+								text: [entry.manufacturer, entry.orderNumber, entry.category].filter(t => t !== "").join("  ·  ")
+								font.pixelSize: 12
+								color: Theme.textSecondary
+								elide: Text.ElideRight
+							}
+						}
+						Badge {
+							// Device family of the mask version.
+							readonly property var families: ({ "MV-0010": "System 1", "MV-0011": "System 1", "MV-0012": "System 1",
+									"MV-0020": "System 2", "MV-0021": "System 2", "MV-0025": "System 2",
+									"MV-0701": "System 7", "MV-0705": "System 7", "MV-07B0": "System B",
+									"MV-091A": "Coupler", "MV-57B0": "KNX IP" })
+							visible: entry.mask !== ""
+							text: families[entry.mask] ?? entry.mask.replace("MV-", "")
+							tone: entry.deviceDownload ? "info" : "neutral"
+							ToolTip.visible: maskHover.hovered
+							ToolTip.text: entry.deviceDownload
+								? qsTr("Kestrel can configure and download this device (mask %1).").arg(entry.mask)
+								: qsTr("Kestrel can configure this device; downloading to mask %1 is not supported yet.").arg(entry.mask)
+
+							HoverHandler {
+								id: maskHover
+							}
+						}
+						Badge {
+							visible: entry.state === "imported"
+							text: qsTr("In catalog")
+							tone: "success"
+						}
+						ProgressBar {
+							visible: entry.state === "downloading"
+							Layout.preferredWidth: 80
+							from: 0
+							to: 1
+							value: entry.progress
+							indeterminate: entry.progress <= 0
+						}
+						Button {
+							objectName: "catalog.index.cancel"
+							Accessible.name: qsTr("Cancel the download")
+							visible: entry.state === "downloading"
+							text: qsTr("Cancel")
+							onClicked: root.vm.cancelDownload()
+						}
+						Button {
+							objectName: "catalog.index.download"
+							Accessible.name: qsTr("Download %1").arg(entry.orderNumber)
+							visible: entry.state === "available" || entry.state === "failed"
+							enabled: !root.vm.downloading
+							highlighted: entry.state === "available"
+							text: entry.state === "failed" ? qsTr("Retry") : qsTr("Download")
+							onClicked: root.vm.downloadIndexed(entry.index)
+						}
+					}
+				}
 			}
 		}
 

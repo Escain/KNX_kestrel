@@ -22,6 +22,9 @@
 #include "QtWait.hpp"
 
 #include <QAbstractItemModelTester>
+#include <QSignalSpy>
+#include <QUrl>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -182,6 +185,63 @@ private Q_SLOTS:
 		QVERIFY(m_ws->catalog()->waitForIdle());
 		QCOMPARE(m_ws->catalog()->entries().size(), std::size_t{2});
 		QCOMPARE(QDir(m_dir->filePath(u"catalog"_s)).entryList({u"*.knxprod"_s}).size(), 1);
+	}
+
+	void fr_cat_4__productIndexDownloadsAndImports()
+	{
+		viewmodels::CatalogPanelVM* panel = m_ws->catalogPanel();
+		panel->activate();
+		QFile fixture(kFixture);
+		QVERIFY(fixture.open(QIODevice::ReadOnly));
+		const QByteArray bytes = fixture.readAll();
+		auto entry = [&](QString order, QString product, QString url, QString sha256, QString category)
+		{
+			catalog::IndexedProduct p;
+			p.manufacturer = u"Kestrel Test"_s;
+			p.manufacturerId = u"M-FFFF"_s;
+			p.orderNumber = std::move(order);
+			p.product = std::move(product);
+			p.category = std::move(category);
+			p.url = std::move(url);
+			p.format = u"knxprod"_s;
+			p.sha256 = std::move(sha256);
+			p.mask = u"MV-07B0"_s;
+			return p;
+		};
+		const QString sha = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+		panel->setProductIndex({entry(u"KTB-2"_s, u"Kestrel Test Button 2-fold"_s, QUrl::fromLocalFile(kFixture).toString(), sha,
+										u"push button"_s),
+			entry(u"KTX-9"_s, u"Missing product"_s, QUrl::fromLocalFile(m_dir->filePath(u"missing.knxprod"_s)).toString(), {},
+			u"binary input"_s)});
+		QAbstractItemModelTester tester(panel->indexModel(), QAbstractItemModelTester::FailureReportingMode::QtTest);
+		using R = viewmodels::ProductIndexModel;
+
+		// The search tolerates punctuation in order numbers and a typo in longer words.
+		panel->setFilter(u"ktb2"_s);
+		QCOMPARE(panel->indexCount(), 1);
+		panel->setFilter(u"kestrl button"_s);
+		QCOMPARE(panel->indexCount(), 1);
+		QCOMPARE(panel->indexModel()->index(0, 0).data(R::StateRole).toString(), u"available"_s);
+		QVERIFY(panel->indexModel()->index(0, 0).data(R::DeviceDownloadRole).toBool());
+
+		QSignalSpy finished(panel, &viewmodels::CatalogPanelVM::downloadFinished);
+		panel->downloadIndexed(0);
+		QVERIFY(panel->isDownloading());
+		QVERIFY(finished.wait(10000));
+		QCOMPARE(finished.first().at(0).toBool(), true);
+		QVERIFY(!finished.first().at(1).toString().contains(u"updated"_s));
+		QVERIFY(m_ws->catalog()->waitForIdle());
+		QVERIFY(m_ws->catalog()->entryForProgram(kButtonProgram));
+		QCOMPARE(panel->indexModel()->index(0, 0).data(R::StateRole).toString(), u"imported"_s);
+
+		// A download that fails marks the row and reports it.
+		panel->setFilter(u"missing"_s);
+		QCOMPARE(panel->indexCount(), 1);
+		panel->downloadIndexed(0);
+		QVERIFY(finished.wait(10000));
+		QCOMPARE(finished.last().at(0).toBool(), false);
+		QCOMPARE(panel->indexModel()->index(0, 0).data(R::StateRole).toString(), u"failed"_s);
+		QVERIFY(!panel->lastError().isEmpty());
 	}
 
 	void fr_cat_1__indexIsReusedWithoutParsing()

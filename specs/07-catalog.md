@@ -86,14 +86,45 @@ ApplicationProgram{ id, name, applicationNumber, applicationVersion, programType
 (mask, number, version), channels and effective com objects (number, channel, text, function, size, flags, DPT).
 Warnings go to stderr (text) or the `warnings` array (JSON). Exit code 3 when the file cannot be read or parsed.
 
-## 6. Test data (ADR-009)
+## 6. Product index (FR-CAT-4)
+
+Users search for a product ("merten 670804") and download its product file from the manufacturer with one
+click, without hunting through manufacturers' websites.
+
+- **What ships:** `src/catalog/data/product-index.json`, a list of products with the manufacturer's official
+  download (built in as a resource; `catalog::builtinProductIndex()`). Never the files (ADR-009): manufacturers
+  allow downloading their product files, not redistributing them.
+  ```json
+  {"version": 1, "products": [{"manufacturer": "Merten (Schneider Electric)", "manufacturerId": "M-0064",
+    "orderNumber": "MTN670804", "product": "Push-button interface, 4-gang plus", "category": "binary input",
+    "url": "https://download.se.com/files?p_Doc_Ref=…", "page": "…", "format": "zip", "size": 459336,
+    "sha256": "…", "applicationId": "M-0064_A-122A-12-E6CB-O000C", "mask": "MV-0021", "verified": "2026-10-29"}]}
+  ```
+  Each entry was checked by downloading it: the product text, order number, application and mask come from
+  the file itself, and size and SHA-256 are of the download on the `verified` date.
+- **Search** (`searchProductIndex`): every word must match the manufacturer, product, order number or
+  category. Order numbers match without punctuation and case ("mtn-670804"); words of five letters or more
+  also match one edit away ("mergten"). Ranked: order number, then the sum of the fields' best matches.
+- **Fetch** (`app::ProductFetcher`): HTTP(S) GET with redirects (also `file://` for tests), 256 MB limit, a
+  browser-like User-Agent (some servers refuse others). A download whose SHA-256 differs from the index is
+  still used (the manufacturer updated the file) and reported. `extractProductFiles` takes the `.knxprod` out
+  of it: the download itself, the `.knxprod` entries of a zip, or of a zip inside it.
+- **GUI:** the Catalog panel's search also lists matching index products ("From manufacturers") with
+  Download, progress and Cancel, "In catalog" once imported (same manufacturer id and order number), and the
+  device family of the mask (Kestrel downloads to System B and System 2 devices). The imported file is
+  handed to `CatalogService::importFile`.
+- **CLI:** `kestrel-cli catalog search <words>` and `catalog fetch <order number> [--to dir]`; `--index` uses
+  another index file.
+- Links go stale when manufacturers reorganise their sites; re-check the index before a release.
+
+## 7. Test data (ADR-009)
 `tests/data/catalog/M-FFFF/*.xml` are hand-written for the fake manufacturer M-FFFF: a 2-fold push button (MV-07B0,
 relative segments, a union, enumerations, choose/when per channel, de-DE defaults with en-US/de-DE translations) and
 an 8-fold switch actuator (MV-0705, channels A–H, absolute segments, product load procedure).
 `tests/data/archive/make_fixtures.py` zips them into `M-FFFF.knxprod` (committed; `.gitignore` re-includes
 `tests/data/**/*.knxprod`) and writes the ZIP fixtures. A unit test fails if the committed `.knxprod` is stale.
 
-## 7. Open points
+## 8. Open points
 - `ModuleDefs`/`Module` instantiation (channels defined in modules, `{{argCH}}` text placeholders) is not resolved.
 - `knx_master.xml` (mask versions, DPT names, medium types) is not parsed.
 - `ComObjectRef` overrides are applied attribute by attribute; text parameters (`TextParameterRefId`) are kept raw.

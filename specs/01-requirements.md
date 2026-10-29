@@ -70,6 +70,8 @@ IDs are referenced by tests and the traceability matrix (`specs/05-test-strategy
 - **FR-CAT-1** Import `.knxprod` (ZIP of manufacturer XML + embedded `knx_master.xml`).
 - **FR-CAT-2** Browse/search the catalog (manufacturer, product, application program version).
 - **FR-CAT-3** Instantiate a product into the topology.
+- **FR-CAT-4** Find common products by brand, product or order number in a built-in index and download their
+  product file from the manufacturer (the index ships, the files do not; ADR-009).
 
 ### Device configuration
 - **FR-DEV-1** Render the parameter dialog from the application program description

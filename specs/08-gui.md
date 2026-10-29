@@ -24,7 +24,7 @@ Problems / Catalog / Commissioning / Bus Connection (bottom, tabbed)
 
 `MainWindow::kLayoutVersion` is 3 (the Catalog and Commissioning docks were added).
 
-## 2. Catalog (FR-CAT-1/2/3)
+## 2. Catalog (FR-CAT-1/2/3/4)
 
 **Folder.** `$KESTREL_CATALOG_DIR` if set (tests), else `QStandardPaths::AppDataLocation + "/catalog"`. Import
 copies the file there. A file whose content is already in the folder is not copied again. A different file with the

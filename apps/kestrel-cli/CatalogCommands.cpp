@@ -2,9 +2,15 @@
 
 #include "Cli.hpp"
 
+#include "kestrel/app/ProductFetcher.hpp"
 #include "kestrel/catalog/Knxprod.hpp"
+#include "kestrel/catalog/ProductIndex.hpp"
 
+#include <QDir>
+#include <QEventLoop>
+#include <QFile>
 #include <QJsonArray>
+#include <QRegularExpression>
 
 namespace kestrel::cli
 {
@@ -162,6 +168,111 @@ int catalogInspect(Invocation& inv)
 		text.join(u'\n'));
 }
 
+/// The built-in index, or the one of --index.
+std::optional<std::vector<catalog::IndexedProduct>> productIndex(Invocation& inv, int& exitCode)
+{
+	if (!inv.isSet(u"index"_s))
+		return catalog::builtinProductIndex();
+	QFile file(inv.value(u"index"_s));
+	if (!file.open(QIODevice::ReadOnly))
+	{
+		exitCode = inv.out.failure(kExitIo, u"cannot read %1"_s.arg(file.fileName()), u"IoError"_s);
+		return std::nullopt;
+	}
+	auto parsed = catalog::parseProductIndex(file.readAll());
+	if (!parsed)
+	{
+		exitCode = inv.out.failure(kExitFindings, parsed.error());
+		return std::nullopt;
+	}
+	return std::move(*parsed);
+}
+
+QJsonObject productJson(const catalog::IndexedProduct& p)
+{
+	return {{u"manufacturer"_s, p.manufacturer}, {u"orderNumber"_s, p.orderNumber}, {u"product"_s, p.product},
+		{u"category"_s, p.category}, {u"mask"_s, p.mask}, {u"url"_s, p.url}};
+}
+
+int catalogSearch(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto index = productIndex(inv, exitCode);
+	if (!index)
+		return exitCode;
+	QJsonArray found;
+	QList<QStringList> rows{{u"order"_s, u"manufacturer"_s, u"product"_s, u"kind"_s, u"mask"_s}};
+	for (const std::size_t i : catalog::searchProductIndex(*index, inv.args[0]))
+	{
+		const catalog::IndexedProduct& p = (*index)[i];
+		found.append(productJson(p));
+		rows.append({p.orderNumber, p.manufacturer, p.product, p.category, p.mask});
+	}
+	const QString text = found.isEmpty() ? u"no product matches \"%1\""_s.arg(inv.args[0])
+										 : table(rows, {}).join(u'\n');
+	return inv.out.success({{u"products"_s, found}}, text);
+}
+
+int catalogFetch(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto index = productIndex(inv, exitCode);
+	if (!index)
+		return exitCode;
+	// The order number exactly (punctuation and case ignored), else a search with a single hit.
+	const auto fold = [](QString text) { return text.remove(QRegularExpression(u"[^A-Za-z0-9]"_s)).toLower(); };
+	const catalog::IndexedProduct* product = nullptr;
+	for (const catalog::IndexedProduct& p : *index)
+	{
+		if (fold(p.orderNumber) == fold(inv.args[0]))
+			product = &p;
+	}
+	if (!product)
+	{
+		const auto hits = catalog::searchProductIndex(*index, inv.args[0]);
+		if (hits.size() != 1)
+		{
+			return inv.out.failure(kExitFindings,
+				hits.empty() ? u"no product matches \"%1\""_s.arg(inv.args[0])
+							 : u"%1 products match \"%2\"; give the order number (catalog search)"_s.arg(hits.size()).arg(inv.args[0]),
+				u"NotFound"_s);
+		}
+		product = &(*index)[hits.front()];
+	}
+	const QDir target(inv.isSet(u"to"_s) ? inv.value(u"to"_s) : QDir::currentPath());
+	if (!QDir().mkpath(target.path()))
+		return inv.out.failure(kExitIo, u"cannot create %1"_s.arg(target.path()), u"IoError"_s);
+
+	inv.out.note(u"downloading %1 %2 from %3"_s.arg(product->manufacturer, product->orderNumber, product->url));
+	app::ProductFetcher fetcher;
+	QEventLoop loop;
+	std::optional<Result<app::FetchedProduct>> result;
+	fetcher.fetch(*product,
+		[&](Result<app::FetchedProduct> fetched)
+		{
+			result = std::move(fetched);
+			loop.quit();
+		});
+	if (!result)
+		loop.exec();
+	if (!*result)
+		return inv.out.failure(kExitIo, result->error());
+	if (!(*result)->matchesIndex)
+		inv.out.note(u"note: the file differs from the one the index was made with (updated by the manufacturer?)"_s);
+	QJsonArray files;
+	QStringList lines;
+	for (const catalog::ExtractedFile& file : (*result)->files)
+	{
+		QFile out(target.filePath(file.name));
+		if (!out.open(QIODevice::WriteOnly) || out.write(file.data) != file.data.size())
+			return inv.out.failure(kExitIo, u"cannot write %1"_s.arg(out.fileName()), u"IoError"_s);
+		files.append(out.fileName());
+		lines.append(u"saved %1"_s.arg(QDir::toNativeSeparators(out.fileName())));
+	}
+	return inv.out.success({{u"product"_s, productJson(*product)}, {u"files"_s, files}, {u"sha256"_s, (*result)->sha256}},
+		lines.join(u'\n'));
+}
+
 } // namespace
 
 std::vector<Command> catalogCommands()
@@ -169,10 +280,18 @@ std::vector<Command> catalogCommands()
 	const QCommandLineOption language(u"language"_s,
 		u"Text language, e.g. de-DE (default en-US; falls back to the same language, then the file's default)."_s,
 		u"lang"_s, u"en-US"_s);
+	const QCommandLineOption indexOption(u"index"_s, u"Product index JSON to use instead of the built-in one."_s, u"file"_s);
+	const QCommandLineOption to(u"to"_s, u"Folder for the downloaded .knxprod files (default: the current folder)."_s, u"dir"_s);
 	return {
 		{{u"catalog"_s, u"inspect"_s}, {u"file"_s},
 			u"List the products, application programs, channels and com objects of a .knxprod (FR-CAT-1)."_s,
 			{language}, catalogInspect},
+		{{u"catalog"_s, u"search"_s}, {u"query"_s},
+			u"Search the product index for products whose file can be downloaded (words: brand, order number, kind)."_s,
+			{indexOption}, catalogSearch},
+		{{u"catalog"_s, u"fetch"_s}, {u"orderNumber"_s},
+			u"Download a product's file from its manufacturer (product index) and save the .knxprod."_s,
+			{indexOption, to}, catalogFetch},
 	};
 }
 

@@ -1,5 +1,6 @@
 #include "kestrel/viewmodels/CatalogPanelVM.hpp"
 
+#include "kestrel/app/ProductFetcher.hpp"
 #include "kestrel/model/Operations.hpp"
 #include "kestrel/viewmodels/CatalogService.hpp"
 #include "kestrel/viewmodels/Format.hpp"
@@ -8,6 +9,8 @@
 
 #include <QDir>
 #include <QMimeData>
+#include <QRegularExpression>
+#include <QTemporaryDir>
 #include <QUrl>
 
 #include <set>
@@ -141,9 +144,152 @@ bool CatalogFilterModel::filterAcceptsRow(int sourceRow, const QModelIndex& sour
 
 // --- CatalogPanelVM ----------------------------------------------------------------------------------------
 
+// --- ProductIndexModel ----------------------------------------------------------------------------------------
+
+namespace
+{
+
+QString foldedOrder(QString text)
+{
+	static const QRegularExpression punctuation(u"[^A-Za-z0-9]"_s);
+	return text.remove(punctuation).toLower();
+}
+
+} // namespace
+
+ProductIndexModel::ProductIndexModel(CatalogService* catalog, QObject* parent)
+	: QAbstractListModel(parent), m_catalog(catalog), m_index(catalog::builtinProductIndex())
+{
+	setQuery({});
+	connect(m_catalog, &CatalogService::entriesChanged, this, &ProductIndexModel::refresh);
+}
+
+int ProductIndexModel::rowCount(const QModelIndex& parent) const
+{
+	return parent.isValid() ? 0 : static_cast<int>(m_rows.size());
+}
+
+QVariant ProductIndexModel::data(const QModelIndex& index, int role) const
+{
+	const catalog::IndexedProduct* p = productAt(index.row());
+	if (!p)
+		return {};
+	const std::size_t position = m_rows[static_cast<std::size_t>(index.row())];
+	switch (role)
+	{
+	case Qt::DisplayRole:
+	case ProductRole: return p->product;
+	case ManufacturerRole: return p->manufacturer;
+	case OrderNumberRole: return p->orderNumber;
+	case CategoryRole: return p->category;
+	case MaskRole: return p->mask;
+	case DeviceDownloadRole: return p->mask == u"MV-07B0" || p->mask == u"MV-0021";
+	case StateRole:
+		if (m_downloading.contains(position))
+			return u"downloading"_s;
+		if (isImported(*p))
+			return u"imported"_s;
+		return m_failed.contains(position) ? u"failed"_s : u"available"_s;
+	case ProgressRole: return m_downloading.contains(position) ? m_downloading.at(position) : 0.0;
+	default: return {};
+	}
+}
+
+QHash<int, QByteArray> ProductIndexModel::roleNames() const
+{
+	return {{ManufacturerRole, "manufacturer"}, {ProductRole, "product"}, {OrderNumberRole, "orderNumber"},
+		{CategoryRole, "category"}, {MaskRole, "mask"}, {DeviceDownloadRole, "deviceDownload"},
+		{StateRole, "state"}, {ProgressRole, "progress"}};
+}
+
+void ProductIndexModel::setIndex(std::vector<catalog::IndexedProduct> index)
+{
+	beginResetModel();
+	m_index = std::move(index);
+	m_downloading.clear();
+	m_failed.clear();
+	m_rows.clear();
+	endResetModel();
+	setQuery({});
+}
+
+void ProductIndexModel::setQuery(const QString& query)
+{
+	auto rows = catalog::searchProductIndex(m_index, query);
+	if (rows == m_rows)
+		return;
+	beginResetModel();
+	m_rows = std::move(rows);
+	endResetModel();
+}
+
+const catalog::IndexedProduct* ProductIndexModel::productAt(int row) const
+{
+	const auto position = positionAt(row);
+	return position ? &m_index[*position] : nullptr;
+}
+
+std::optional<std::size_t> ProductIndexModel::positionAt(int row) const
+{
+	if (row < 0 || static_cast<std::size_t>(row) >= m_rows.size())
+		return std::nullopt;
+	return m_rows[static_cast<std::size_t>(row)];
+}
+
+bool ProductIndexModel::isImported(const catalog::IndexedProduct& product) const
+{
+	const QString order = foldedOrder(product.orderNumber);
+	for (const CatalogEntry& entry : m_catalog->entries())
+	{
+		if (entry.manufacturerId == product.manufacturerId && foldedOrder(entry.orderNumber) == order)
+			return true;
+	}
+	return false;
+}
+
+void ProductIndexModel::changed(std::size_t position)
+{
+	for (std::size_t row = 0; row < m_rows.size(); ++row)
+	{
+		if (m_rows[row] == position)
+			Q_EMIT dataChanged(index(static_cast<int>(row)), index(static_cast<int>(row)), {StateRole, ProgressRole});
+	}
+}
+
+void ProductIndexModel::setDownloading(std::size_t position, double progress)
+{
+	m_failed.erase(position);
+	m_downloading[position] = progress;
+	changed(position);
+}
+
+void ProductIndexModel::setFailed(std::size_t position)
+{
+	m_downloading.erase(position);
+	m_failed.insert(position);
+	changed(position);
+}
+
+void ProductIndexModel::clearState(std::size_t position)
+{
+	m_downloading.erase(position);
+	m_failed.erase(position);
+	changed(position);
+}
+
+void ProductIndexModel::refresh()
+{
+	if (!m_rows.empty())
+		Q_EMIT dataChanged(index(0), index(static_cast<int>(m_rows.size()) - 1), {StateRole});
+}
+
+// --- CatalogPanelVM ---------------------------------------------------------------------------------------------
+
 CatalogPanelVM::CatalogPanelVM(const Services& services, CatalogService* catalog, QObject* parent)
 	: PanelVM(services, u"catalog"_s, parent)
 	, m_catalog(catalog)
+	, m_index(new ProductIndexModel(catalog, this))
+	, m_fetcher(new app::ProductFetcher(this))
 	, m_products(new CatalogProductModel(catalog, this))
 	, m_filtered(new CatalogFilterModel(this))
 {
@@ -190,7 +336,110 @@ void CatalogPanelVM::setFilter(const QString& filter)
 		return;
 	m_filter = filter;
 	m_filtered->setText(filter);
+	m_index->setQuery(filter);
 	Q_EMIT filterChanged();
+	Q_EMIT indexChanged();
+}
+
+QAbstractItemModel* CatalogPanelVM::indexModel() const
+{
+	return m_index;
+}
+
+int CatalogPanelVM::indexCount() const
+{
+	return m_index->rowCount();
+}
+
+bool CatalogPanelVM::isDownloading() const
+{
+	return m_downloadPosition.has_value();
+}
+
+void CatalogPanelVM::setProductIndex(std::vector<catalog::IndexedProduct> index)
+{
+	cancelDownload();
+	m_index->setIndex(std::move(index));
+	m_index->setQuery(m_filter);
+	Q_EMIT indexChanged();
+}
+
+void CatalogPanelVM::cancelDownload()
+{
+	m_fetcher->cancel();
+}
+
+void CatalogPanelVM::downloadIndexed(int row)
+{
+	const auto position = m_index->positionAt(row);
+	if (!position)
+		return;
+	if (m_downloadPosition)
+	{
+		setError(tr("Another product file is being downloaded."));
+		return;
+	}
+	const catalog::IndexedProduct product = *m_index->productAt(row);
+	m_downloadPosition = position;
+	m_index->setDownloading(*position, 0.0);
+	Q_EMIT indexChanged();
+	m_fetcher->fetch(product,
+		[this, product, position = *position](Result<app::FetchedProduct> fetched)
+		{
+			m_downloadPosition.reset();
+			auto fail = [&](const QString& message)
+			{
+				m_index->setFailed(position);
+				setError(message);
+				Q_EMIT indexChanged();
+				Q_EMIT downloadFinished(false, message);
+			};
+			if (!fetched)
+			{
+				fail(tr("%1 %2: %3").arg(product.manufacturer, product.orderNumber,
+					QString::fromStdString(fetched.error().message)));
+				return;
+			}
+			// The catalog copies each file into its folder and indexes it in the background.
+			QTemporaryDir staging;
+			if (!staging.isValid())
+			{
+				fail(tr("Cannot create a temporary folder for the download."));
+				return;
+			}
+			QStringList imported;
+			for (const catalog::ExtractedFile& file : fetched->files)
+			{
+				const QString path = staging.filePath(file.name);
+				QFile out(path);
+				if (!out.open(QIODevice::WriteOnly) || out.write(file.data) != file.data.size())
+				{
+					fail(tr("Cannot write %1.").arg(path));
+					return;
+				}
+				out.close();
+				auto name = m_catalog->importFile(path);
+				if (!name)
+				{
+					fail(QString::fromStdString(name.error().message));
+					return;
+				}
+				imported.append(*name);
+			}
+			m_index->clearState(position);
+			clearError();
+			QString message = tr("Downloaded %1 %2 (%3).").arg(product.manufacturer, product.orderNumber, imported.join(u", "_s));
+			if (!fetched->matchesIndex)
+				message += u' ' + tr("The manufacturer has updated the file since the index was made.");
+			Q_EMIT indexChanged();
+			Q_EMIT statusChanged();
+			Q_EMIT downloadFinished(true, message);
+		},
+		[this, position = *position](qint64 received, qint64 total)
+		{
+			if (total > 0)
+				m_index->setDownloading(position, static_cast<double>(received) / static_cast<double>(total));
+		});
 }
 
 bool CatalogPanelVM::isBusy() const

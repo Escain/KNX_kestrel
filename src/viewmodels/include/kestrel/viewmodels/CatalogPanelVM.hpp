@@ -7,12 +7,21 @@
 // The target line follows the selection: the selected line, or the line of the selected device. When the
 // selection moves elsewhere (a group address, a building part) the last target is kept.
 
+#include "kestrel/catalog/ProductIndex.hpp"
 #include "kestrel/viewmodels/KeyedTableModel.hpp"
 #include "kestrel/viewmodels/PanelVM.hpp"
 
+#include <QAbstractListModel>
 #include <QSortFilterProxyModel>
 
+#include <map>
 #include <optional>
+#include <set>
+
+namespace kestrel::app
+{
+class ProductFetcher;
+}
 
 namespace kestrel::viewmodels
 {
@@ -67,6 +76,55 @@ private:
 	QStringList m_words;
 };
 
+/// Products of the product index (catalog::builtinProductIndex()) that match the filter, with their download
+/// state. Roles: manufacturer, product, orderNumber, category, mask, deviceDownload (Kestrel can download
+/// to such a device), state ("available", "downloading", "imported", "failed"), progress (0..1).
+class ProductIndexModel : public QAbstractListModel
+{
+	Q_OBJECT
+
+public:
+	enum Role
+	{
+		ManufacturerRole = Qt::UserRole + 1,
+		ProductRole,
+		OrderNumberRole,
+		CategoryRole,
+		MaskRole,
+		DeviceDownloadRole,
+		StateRole,
+		ProgressRole,
+	};
+
+	explicit ProductIndexModel(CatalogService* catalog, QObject* parent = nullptr);
+
+	int rowCount(const QModelIndex& parent = {}) const override;
+	QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+	QHash<int, QByteArray> roleNames() const override;
+
+	void setIndex(std::vector<catalog::IndexedProduct> index);
+	void setQuery(const QString& query);
+	const catalog::IndexedProduct* productAt(int row) const;
+	/// Position in the index of a row.
+	std::optional<std::size_t> positionAt(int row) const;
+
+	void setDownloading(std::size_t position, double progress);
+	void setFailed(std::size_t position);
+	void clearState(std::size_t position);
+	/// Re-checks which products are in the catalog.
+	void refresh();
+
+private:
+	bool isImported(const catalog::IndexedProduct& product) const;
+	void changed(std::size_t position);
+
+	CatalogService* m_catalog;
+	std::vector<catalog::IndexedProduct> m_index;
+	std::vector<std::size_t> m_rows; ///< positions in m_index
+	std::map<std::size_t, double> m_downloading;
+	std::set<std::size_t> m_failed;
+};
+
 class CatalogPanelVM : public PanelVM
 {
 	Q_OBJECT
@@ -83,6 +141,9 @@ class CatalogPanelVM : public PanelVM
 	Q_PROPERTY(QString currentDetails READ currentDetails NOTIFY currentChanged)
 	Q_PROPERTY(QString target READ targetText NOTIFY targetChanged)
 	Q_PROPERTY(bool canAdd READ canAdd NOTIFY targetChanged)
+	Q_PROPERTY(QAbstractItemModel* indexModel READ indexModel CONSTANT)
+	Q_PROPERTY(int indexCount READ indexCount NOTIFY indexChanged)
+	Q_PROPERTY(bool downloading READ isDownloading NOTIFY indexChanged)
 
 public:
 	/// MIME format of a dragged catalog entry (data: its key).
@@ -124,17 +185,33 @@ public:
 	/// Same as addToLine() but for a product dropped on a topology entity.
 	bool addToLine(const QString& key, model::Id<model::Line> line);
 
+	QAbstractItemModel* indexModel() const;
+	ProductIndexModel* productIndexModel() const { return m_index; }
+	int indexCount() const;
+	bool isDownloading() const;
+	/// Downloads the product file of an index row from its manufacturer and imports it (one at a time).
+	Q_INVOKABLE void downloadIndexed(int row);
+	Q_INVOKABLE void cancelDownload();
+	/// Replaces the built-in product index (tests).
+	void setProductIndex(std::vector<catalog::IndexedProduct> index);
+
 Q_SIGNALS:
 	void filterChanged();
 	void statusChanged();
 	void currentChanged();
 	void targetChanged();
+	void indexChanged();
+	/// A downloaded product file was handed to the catalog (or the download failed: ok false).
+	void downloadFinished(bool ok, const QString& message);
 
 private:
 	void onSelectionChanged();
 	void onEntriesChanged();
 
 	CatalogService* m_catalog;
+	ProductIndexModel* m_index;
+	app::ProductFetcher* m_fetcher;
+	std::optional<std::size_t> m_downloadPosition;
 	CatalogProductModel* m_products;
 	CatalogFilterModel* m_filtered;
 	QString m_filter;

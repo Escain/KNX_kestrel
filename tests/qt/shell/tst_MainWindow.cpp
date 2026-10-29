@@ -510,6 +510,17 @@ private Q_SLOTS:
 		QTRY_VERIFY(target->property("text").toString().contains(u"1.1"_s));
 		screenshot(*window, u"catalog"_s);
 
+		// The product index: a search shows products to download, each with a named Download button.
+		ws->catalogPanel()->setFilter(u"switch actuator"_s);
+		QObject* indexSection = findInHost(catalogHost, u"catalog.index"_s);
+		QVERIFY(indexSection);
+		QTRY_VERIFY(indexSection->property("visible").toBool());
+		QVERIFY(ws->catalogPanel()->indexCount() >= 1);
+		const QStringList unnamedInIndex = unnamedInteractiveItems(catalogHost->rootObject());
+		QVERIFY2(unnamedInIndex.isEmpty(), qPrintable(unnamedInIndex.join(u", "_s)));
+		screenshot(*window, u"catalog-index"_s);
+		ws->catalogPanel()->setFilter({});
+
 		QVERIFY(ws->actions()->trigger(u"device.open"_s));
 		const QString id = shell::DocumentArea::deviceDocumentId(device);
 		shell::QmlHost* host = window->documents()->host(id);
