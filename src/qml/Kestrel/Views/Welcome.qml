@@ -31,19 +31,13 @@ Pane {
 			RowLayout {
 				spacing: 16
 
-				Rectangle {
-					implicitWidth: 52
-					implicitHeight: 52
-					radius: 12
-					color: Theme.selection
-
-					Label {
-						anchors.centerIn: parent
-						text: "K"
-						font.pixelSize: 26
-						font.weight: Font.DemiBold
-						color: Theme.accent
-					}
+				Image {
+					objectName: "welcome.logo"
+					source: "qrc:/kestrel/logo/kestrel.svg"
+					sourceSize: Qt.size(56, 56)
+					Layout.preferredWidth: 56
+					Layout.preferredHeight: 56
+					Accessible.ignored: true
 				}
 				ColumnLayout {
 					spacing: 2

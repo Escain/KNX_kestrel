@@ -230,4 +230,23 @@ QIcon themedIcon(const QString& name, const QColor& color)
 	return icon;
 }
 
+QIcon appIcon()
+{
+	QSvgRenderer renderer(u":/kestrel/logo/kestrel.svg"_s);
+	QIcon icon;
+	if (!renderer.isValid())
+		return icon;
+	for (int size : {16, 24, 32, 48, 64, 128, 256})
+	{
+		QPixmap pixmap(size, size);
+		pixmap.fill(Qt::transparent);
+		QPainter painter(&pixmap);
+		painter.setRenderHint(QPainter::Antialiasing);
+		renderer.render(&painter);
+		painter.end();
+		icon.addPixmap(pixmap);
+	}
+	return icon;
+}
+
 } // namespace kestrel::shell

@@ -50,4 +50,7 @@ QString styleSheet(const Theme& theme);
 /// Without a colour it takes the theme's text colour.
 QIcon themedIcon(const QString& name, const QColor& color = {});
 
+/// The Kestrel logo (`:/kestrel/logo/kestrel.svg`, full colour) as the application and window icon.
+QIcon appIcon();
+
 } // namespace kestrel::shell

@@ -23,6 +23,8 @@ int main(int argc, char* argv[])
 	QApplication::setApplicationName(u"Kestrel"_s);
 	QApplication::setApplicationVersion(QStringLiteral(KESTREL_VERSION));
 	kestrel::shell::initializeStyle();
+	QApplication::setWindowIcon(kestrel::shell::appIcon());
+	QGuiApplication::setDesktopFileName(u"kestrel"_s);
 
 	QCommandLineParser parser;
 	parser.setApplicationDescription(u"Open configuration tool for KNX installations"_s);

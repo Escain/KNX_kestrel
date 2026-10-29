@@ -229,6 +229,20 @@ private Q_SLOTS:
 		screenshot(*window, u"open-project"_s);
 	}
 
+	void nfr_2__theLogoIsTheWindowIconAndOnTheWelcomePage()
+	{
+		auto window = makeWindow();
+		QVERIFY(QTest::qWaitForWindowExposed(window.get()));
+		const QIcon icon = window->windowIcon();
+		QVERIFY(icon.availableSizes().contains(QSize(16, 16)));
+		QVERIFY(icon.availableSizes().contains(QSize(256, 256)));
+		shell::QmlHost* host = window->documents()->host(shell::DocumentArea::kWelcomeId);
+		QTRY_VERIFY(host->isLoaded());
+		QObject* logo = findInHost(host, u"welcome.logo"_s);
+		QVERIFY(logo);
+		QTRY_COMPARE(logo->property("status").toInt(), 1); // Image.Ready
+	}
+
 	void fr_prj_1__clickingARecentProjectOpensIt()
 	{
 		// Regression: opening used to close and recreate the welcome tab, so the clicked delegate was destroyed by

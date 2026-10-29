@@ -25,7 +25,6 @@ qt_add_resources(kestrel_shell "kestrel_shell_icons"
 		icons/connect.svg
 		icons/delete.svg
 		icons/download.svg
-		icons/kestrel.svg
 		icons/monitor.svg
 		icons/new.svg
 		icons/open.svg
@@ -33,4 +32,12 @@ qt_add_resources(kestrel_shell "kestrel_shell_icons"
 		icons/redo.svg
 		icons/save.svg
 		icons/undo.svg
+)
+
+# The Kestrel logo (full colour; application and window icon, Welcome page).
+qt_add_resources(kestrel_shell "kestrel_shell_logo"
+	PREFIX "/kestrel/logo"
+	BASE logo
+	FILES
+		logo/kestrel.svg
 )

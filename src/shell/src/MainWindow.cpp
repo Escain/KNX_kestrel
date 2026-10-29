@@ -177,7 +177,7 @@ void MainWindow::applyIcons()
 		{u"bus.connect", "connect"}, {u"bus.groupMonitor", "monitor"}};
 	for (const auto& [id, name] : icons)
 		a.action(QString::fromUtf16(id))->setIcon(themedIcon(QString::fromLatin1(name)));
-	setWindowIcon(themedIcon(u"kestrel"_s, theme().accent));
+	setWindowIcon(appIcon());
 	if (m_toolBar)
 	{
 		// The primary action draws on the accent colour.
