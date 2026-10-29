@@ -159,8 +159,9 @@ The design is the "Kestrel UI redesign" canvas (Claude Design); the code is the 
   own keeps it. Download is the tool bar's primary action (accent button).
 - **Icons** are Kestrel's own stroke SVGs (`src/shell/icons`), recoloured from the theme by `shell::themedIcon`, so
   they do not depend on the desktop icon theme.
-- **Logo:** a teal K with a rufous kestrel perched in its arm (`src/shell/logo/kestrel.svg`, full colour, readable
-  down to 16 px on light and dark). It is the application and window icon (`shell::appIcon`) and heads the Welcome page.
+- **Logo:** a teal K with a rufous kestrel perched in its arm, on a light rounded tile so it also shows on dark
+  title bars (`src/shell/logo/kestrel.svg`, full colour, readable down to 16 px). It is the application and window
+  icon (`shell::appIcon`; `.ico`/`.icns` made by `tools/icons/make_app_icons.py`) and heads the Welcome page.
 - **QML tokens** come from the `Kestrel.Controls` `Theme` singleton: the palette roles, plus the colours a palette
   has no role for (selection tint, hover, status colours and their backgrounds), repeated from `shell::Theme`.
   Shared controls: `PanelToolBar`, `HeaderCell` (table headers), `TableCell` (rows with the selection tint and an
