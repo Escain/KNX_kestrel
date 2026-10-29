@@ -47,7 +47,7 @@ using DownloadPlanner = std::function<Result<download::Plan>(const model::Projec
 class CatalogService;
 
 /// Default planner: finds the device's product database in the catalog (by appProgramRef) and calls
-/// appconfig::planDeviceDownload (System B only; other masks report Unsupported).
+/// appconfig::planDeviceDownload (System B and System 2; other masks report Unsupported).
 DownloadPlanner catalogDownloadPlanner(CatalogService* catalog);
 
 /// SHA-256 (hex) of the exact content of a plan; recorded as DeviceState::downloadedHash after a download.

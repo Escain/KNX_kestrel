@@ -16,7 +16,8 @@ On real hardware so far (a Gira KNX/IP interface and a MEAN WELL KAA-8R System B
   ([`specs/09-memory-images.md`](specs/09-memory-images.md));
 - download that configuration.
 
-Only System B devices (mask 07B0) can be configured so far.
+System B (mask 07B0) and System 2 / BCU 2 (mask 0021) devices can be configured so far; tested on a MEAN WELL
+KAA-8R actuator and a Merten MTN670804 push-button interface.
 
 ## Build
 Requirements: CMake ≥ 3.24, Ninja, a C++20 compiler (GCC 14 / Clang 19), Qt ≥ 6.8

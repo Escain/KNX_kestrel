@@ -93,6 +93,15 @@ void Executor::runStep(knx::TimePoint now)
 	{
 		writeLoadControl(alloc->lsm, allocRelSegmentPayload(*alloc), now);
 	}
+	else if (const auto* control = std::get_if<AdditionalLoadControl>(&step))
+	{
+		writeLoadControl(control->lsm, control->data, now);
+	}
+	else if (const auto* absolute = std::get_if<WriteMem>(&step))
+	{
+		m_wait = Wait::MemoryWrite;
+		m_pending = m_session.memoryWrite(absolute->address, absolute->data, now);
+	}
 	else if (const auto* writeMem = std::get_if<WriteRelMem>(&step))
 	{
 		if (m_tableReferences.contains(writeMem->object))
@@ -186,7 +195,8 @@ void Executor::onLoadState(const Step& step, LoadState state, knx::TimePoint now
 			unexpected(LoadState::Unloaded);
 		}
 	}
-	else if (std::holds_alternative<Load>(step) || std::holds_alternative<AllocRelSegment>(step))
+	else if (std::holds_alternative<Load>(step) || std::holds_alternative<AllocRelSegment>(step)
+		|| std::holds_alternative<AdditionalLoadControl>(step))
 	{
 		state == LoadState::Loading ? advance(now) : unexpected(LoadState::Loading);
 	}
@@ -250,6 +260,17 @@ void Executor::onCompleted(Bytes data, knx::TimePoint now)
 	}
 	case Wait::MemoryWrite:
 	{
+		if (const auto* absolute = std::get_if<WriteMem>(&step))
+		{
+			if (absolute->verify)
+			{
+				m_wait = Wait::MemoryVerify;
+				m_pending = m_session.memoryRead(absolute->address, absolute->data.size(), now);
+				return;
+			}
+			advance(now);
+			return;
+		}
 		const auto& s = std::get<WriteRelMem>(step);
 		if (s.verify)
 		{
@@ -262,6 +283,17 @@ void Executor::onCompleted(Bytes data, knx::TimePoint now)
 	}
 	case Wait::MemoryVerify:
 	{
+		if (const auto* absolute = std::get_if<WriteMem>(&step))
+		{
+			if (data != absolute->data)
+			{
+				fail(Error{ErrorCode::ProtocolError, stepError("memory verification failed: read [" + toHex(data) + "]")},
+					now);
+				return;
+			}
+			advance(now);
+			return;
+		}
 		const auto& s = std::get<WriteRelMem>(step);
 		if (m_wait == Wait::MemoryVerify && data != s.data)
 		{
@@ -348,8 +380,16 @@ void Executor::pump(knx::TimePoint now)
 					continue;
 				}
 				const auto* unload = std::get_if<Unload>(&m_plan.steps[m_index]);
-				if (unload && unload->tolerateError)
+				const auto* writeProp = std::get_if<WriteProp>(&m_plan.steps[m_index]);
+				const bool unreadable = m_wait == Wait::MemoryVerify
+					&& std::holds_alternative<WriteMem>(m_plan.steps[m_index])
+					&& failed->error.message.find("refused") != std::string::npos;
+				if ((unload && unload->tolerateError) || (writeProp && !writeProp->verify) || unreadable)
 				{
+					// Unverified property writes may be refused (the MTN670804's PID 8 write of 10 octets), and a
+					// System 2 device may protect a written segment against reading (its 0x0100 header).
+					if (unreadable)
+						m_actions.push_back(Progress{m_index, m_plan.steps.size(), stepError("written; reading it back is refused")});
 					advance(now);
 				}
 				else

@@ -12,6 +12,9 @@ to a MEAN WELL KAA-8R (System B, application M-0162 A-0001 v2.x). The opt-in tes
   KAA-8R's "Blinds" blocks are top-level chooses on a parameter that is only shown in blinds mode.
   The active set is computed to a fixpoint. The first pass evaluates every choose, and each later pass
   restricts to the refs that were active in the pass before.
+  Exception: a ParameterRef that no `ParameterRefRef` shows anywhere is internal, and its chooses always
+  count. Converted pre-ETS4 programs (the Merten MTN670804) branch on such hidden "Dummy" parameters, often
+  with a single `when default="true"`; with the strict rule nothing of them would be active.
 - `when test="a b"` matches any listed value. Numbers compare numerically ("1.0E+001" = "10"), and
   `<`, `<=`, `>`, `>=`, `!=` prefixes are supported. `when default="true"` applies when no other when of
   the choose matched.
@@ -19,7 +22,12 @@ to a MEAN WELL KAA-8R (System B, application M-0162 A-0001 v2.x). The opt-in tes
 
 ## Parameter segment
 1. Start from the code segment's `<Data>`, zero-filled to its `Size`.
-2. Write **every** parameter that has memory at its own default `Value`, active or not.
+2. Write **every** parameter that has memory at its own default `Value`, active or not. For a union, only its
+   `DefaultUnionParameter` (its members share the memory). A program converted from pre-ETS4 data
+   (`ConvertedFromPreEts4Data` / `PreEts4Style`) has its default image in the `<Data>`: there only parameters with
+   `LegacyPatchAlways="true"` are written while inactive. Found on a Merten MTN670804: with the defaults of hidden
+   parameters written it sent nothing (locking), then 0x3f instead of 1 (an 8-bit union member's default over the
+   1-bit value).
 3. Write every **active** ParameterRef at its value (the user's value, else the ref default, else the
    parameter default).
 

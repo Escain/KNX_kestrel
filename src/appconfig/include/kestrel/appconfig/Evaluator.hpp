@@ -4,7 +4,8 @@
 // parameter values. The semantics were checked byte for byte against a real ETS6 download (specs/09):
 // - Values belong to the Parameter; all of its ParameterRefs share them.
 // - `choose ParamRefId` only counts while that ParameterRef is itself active. A choose on a parameter that is
-//   not shown selects nothing, even if its value would match. Iterated to a fixpoint.
+//   not shown selects nothing, even if its value would match. Iterated to a fixpoint. A parameter that no
+//   ParameterRefRef shows anywhere is internal: its chooses always count (converted pre-ETS4 programs).
 // - `when test="a b c"` matches any listed value. Tokens may start with <, <=, >, >=, != for numeric
 //   comparisons. `when default="true"` applies when no other branch of the choose matched.
 

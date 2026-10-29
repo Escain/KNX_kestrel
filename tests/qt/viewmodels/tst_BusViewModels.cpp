@@ -61,7 +61,7 @@ download::Plan simplePlan()
 {
 	using namespace download;
 	return Plan{{Authorize{}, Unload{4, false}, Load{4}, WriteProp{4, kPidProgramVersion, hex({0xff, 0xff, 0x00, 0x01, 0x10}), true},
-		LoadCompleted{4}, Restart{}}};
+		LoadCompleted{4}, Restart{}}, {}};
 }
 
 app::TelegramRecord record(std::uint16_t destination, std::uint16_t source = 0x1101)
@@ -329,7 +329,7 @@ private Q_SLOTS:
 
 		// A plan the device refuses fails cleanly; the hash is not touched.
 		m_ws->setDownloadPlanner([](const model::Project&, model::Id<model::Device>) -> Result<download::Plan>
-			{ return download::Plan{{download::Authorize{}, download::Unload{4, false}, download::LoadCompleted{4}}}; });
+			{ return download::Plan{{download::Authorize{}, download::Unload{4, false}, download::LoadCompleted{4}}, {}}; });
 		QVERIFY(bus->download());
 		QVERIFY(waitFor([bus] { return !bus->isOperationActive(); }, 30000));
 		QVERIFY(!bus->lastSucceeded());

@@ -130,3 +130,24 @@ link. Search, tunnelling, device info, `device progmode` and `program-ia` all wo
   - **A_Restart is not acknowledged:** the device restarts before sending T_ACK. Repeating the request
     restarted it several times, and the relay outputs toggled. A missing T_ACK on A_Restart now counts as done.
   - The simulator enforces all three (authorization, 10-octet load controls, and the restart behaviour by design).
+- **First System 2 device (Merten MTN670804, push-button interface 4-gang plus, mask 0021).** Schneider's
+  product file (M-0064, an OEM program of Merten M-000C, converted from pre-ETS4 data, ProductProcedure with
+  absolute segments). Configured by Kestrel alone: input 1 toggles light F on 1/0/6 and follows 2/0/6. Findings:
+  - It answers the T_Disconnect sent before T_Connect with its own, and the bus repeated it after our
+    T_Connect. The session now holds a T_Disconnect that arrives within 500 ms of connecting, before any T_ACK.
+  - Additional load controls (event 3): absolute segment `00 addr(2) size(2) access memtype attributes`,
+    task segment `02 addr(2) pei(1) mfr(2) app(2) version(1)`, task pointers `03 init save serial`, task
+    control 1 `04 addr count`, task control 2 `05 callback addr seg0 seg1`. Without the PEI octet the device
+    stored the application id one octet off (PID 13 `0c 12 2a 12 00`) and its application stayed halted.
+    The id is the original manufacturer's (M-000C), as ETS had left it (`00 0c 12 2a 11`).
+  - A segment's `<Mask>` says which octets the tool writes. The rest are the device's: the BCU header's ids
+    (from the task segment), its run-error flags (0x010D) and pointers, the own individual address, and the
+    last octet of segments allocated with attribute 0x80, which the device fills with the XOR of the others.
+    Writing the whole `<Data>` cleared the run-error flags and the application stayed halted
+    (PID 6 = 0); `kestrel-cli device memory-write 15.15.3 0x010d ff` repaired it.
+  - Parameters of a converted program: the `<Data>` is the default image. Writing every parameter's default
+    (the System B rule) locked the inputs (hidden locking parameters), and an 8-bit union member's default
+    over the 1-bit value made it send `3f` instead of `01` (the actuator ignored it). Only active parameters,
+    and those with `LegacyPatchAlways="true"`, are written now (specs/09).
+  - The application serves the 2-gang and the 4-gang interface; its "Push-button interface" parameter
+    defaults to 2-gang and has to be set to 4-gang for the MTN670804.

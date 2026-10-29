@@ -76,8 +76,9 @@ namespace
 class Walker
 {
 public:
-	Walker(const catalog::ApplicationProgram& app, const ParameterValues& values, const QSet<QString>* previous)
-		: m_app(app), m_values(values), m_previous(previous)
+	Walker(const catalog::ApplicationProgram& app, const ParameterValues& values, const QSet<QString>* previous,
+		const QSet<QString>& shownAnywhere)
+		: m_app(app), m_values(values), m_previous(previous), m_shownAnywhere(shownAnywhere)
 	{
 	}
 
@@ -138,9 +139,12 @@ private:
 	void choose(const DynamicNode& node)
 	{
 		const QString refId = node.attribute(u"ParamRefId"_s);
-		if (m_previous && !m_previous->contains(refId))
+		// The controlling parameter is not shown: nothing below this choose is. A parameter that no
+		// ParameterRefRef shows at all is internal (converted pre-ETS4 programs branch on hidden "Dummy"
+		// parameters): its chooses always count.
+		if (m_previous && m_shownAnywhere.contains(refId) && !m_previous->contains(refId))
 		{
-			return; // the controlling parameter is not shown: nothing below this choose is
+			return;
 		}
 		const QString value = valueOf(m_app, m_values, refId);
 		bool matched = false;
@@ -172,6 +176,7 @@ private:
 	const catalog::ApplicationProgram& m_app;
 	const ParameterValues& m_values;
 	const QSet<QString>* m_previous;
+	const QSet<QString>& m_shownAnywhere;
 	Evaluation m_result;
 	QSet<QString> m_parameterSet;
 	QSet<QString> m_comObjectSet;
@@ -179,14 +184,31 @@ private:
 
 } // namespace
 
+namespace
+{
+
+void collectParameterRefRefs(const DynamicNode& node, QSet<QString>& out)
+{
+	for (const DynamicNode& child : node.children)
+	{
+		if (child.kind == DynamicKind::ParameterRefRef)
+			out.insert(child.attribute(u"RefId"_s));
+		collectParameterRefRefs(child, out);
+	}
+}
+
+} // namespace
+
 Result<Evaluation> evaluate(const catalog::ApplicationProgram& app, const ParameterValues& values)
 {
+	QSet<QString> shownAnywhere;
+	collectParameterRefRefs(app.dynamic, shownAnywhere);
 	// First pass: every choose counts. Then a choose only counts while its ParameterRef was active in the
 	// previous pass, until the active set no longer changes.
 	std::optional<QSet<QString>> previous;
 	for (int iteration = 0; iteration < 100; ++iteration)
 	{
-		Walker walker(app, values, previous ? &*previous : nullptr);
+		Walker walker(app, values, previous ? &*previous : nullptr, shownAnywhere);
 		walker.walk(app.dynamic);
 		QSet<QString> parameters;
 		QSet<QString> comObjects;

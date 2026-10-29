@@ -273,3 +273,143 @@ UNIT_TEST(FR_DEV_3__importedDeviceRegeneratesItsImages)
 	ASSERT(project.comObjects().rows().empty());
 	ASSERT(project.devices().at(device).params.empty());
 }
+
+namespace
+{
+
+/// A System 2 (mask 0021) program in the shape of a converted pre-ETS4 one (synthetic, M-FFFF): absolute segments
+/// for the tables and parameters, a union, a choose on an internal parameter no ParameterRefRef shows.
+catalog::ApplicationProgram system2Program()
+{
+	catalog::ApplicationProgram app;
+	app.id = u"M-FFFF_A-0002-12-0001-O000C"_s;
+	app.applicationNumber = 0x122A;
+	app.applicationVersion = 0x12;
+	app.maskVersion = u"MV-0021"_s;
+	app.attributes[u"OriginalManufacturer"_s] = u"M-000C"_s;
+	app.attributes[u"ConvertedFromPreEts4Data"_s] = u"true"_s;
+	auto segment = [&](QString id, unsigned address, QByteArray data)
+	{
+		catalog::AbsoluteSegment s;
+		s.id = std::move(id);
+		s.address = address;
+		s.size = static_cast<unsigned>(data.size());
+		s.data = data;
+		app.absoluteSegments.push_back(s);
+	};
+	segment(u"AS-0116"_s, 0x0116, QByteArray::fromHex("03 00 00 00 01 00 02 00"));   // count, own address, 0/0/1, 0/0/2
+	segment(u"AS-019C"_s, 0x019C, QByteArray::fromHex("03 01 00 fe 01 02 02 00"));   // three slots
+	segment(u"AS-0234"_s, 0x0234, QByteArray::fromHex("02 bd 02 ff 00 04 df 07 7f")); // 2 objects, then code
+	segment(u"AS-02F0"_s, 0x02F0, QByteArray::fromHex("aa 09 01 00"));
+	app.addressTable = catalog::TablePlacement{u"AS-0116"_s, 0, 3, {}};
+	app.associationTable = catalog::TablePlacement{u"AS-019C"_s, 0, 3, {}};
+	app.comObjectTable = catalog::TablePlacement{u"AS-0234"_s, 0, std::nullopt, {}};
+
+	auto type = [&](QString id, unsigned bits)
+	{
+		catalog::ParameterType t;
+		t.id = std::move(id);
+		t.kind = catalog::ParameterTypeKind::Number;
+		t.sizeInBit = bits;
+		app.parameterTypes.push_back(t);
+	};
+	type(u"T-8"_s, 8);
+	type(u"T-0"_s, 0);
+	auto parameter = [&](QString id, QString value, std::optional<unsigned> offset, QString patch = {})
+	{
+		catalog::Parameter p;
+		p.id = std::move(id);
+		p.parameterType = offset ? u"T-8"_s : u"T-0"_s;
+		p.value = std::move(value);
+		if (offset)
+			p.memory = catalog::MemoryLocation{u"AS-02F0"_s, *offset, 0};
+		if (!patch.isEmpty())
+			p.attributes[u"LegacyPatchAlways"_s] = patch;
+		app.parameters.push_back(p);
+		catalog::ParameterRef r;
+		r.id = p.id + u"_R"_s;
+		r.refId = p.id;
+		app.parameterRefs.push_back(r);
+	};
+	parameter(u"P-Internal"_s, u"0"_s, std::nullopt);       // internal: no ParameterRefRef shows it
+	parameter(u"P-Edge"_s, u"10"_s, 3, u"false"_s);          // shown: toggles
+	parameter(u"P-Locked"_s, u"2"_s, 2, u"false"_s);         // hidden: its default must not be written
+	parameter(u"P-Always"_s, u"5"_s, 0, u"true"_s);          // hidden, but patched always
+	// A union at offset 1: the default member's value 6, another member's 0.
+	app.unions.push_back(catalog::Union{8, catalog::MemoryLocation{u"AS-02F0"_s, 1, 0}, std::nullopt,
+		{u"UP-Long"_s, u"UP-Other"_s}, {}});
+	for (const auto& [id, value, isDefault] : {std::tuple{u"UP-Long"_s, u"6"_s, true}, {u"UP-Other"_s, u"0"_s, false}})
+	{
+		catalog::Parameter p;
+		p.id = id;
+		p.parameterType = u"T-8"_s;
+		p.value = value;
+		p.unionMember = catalog::UnionMember{0, 0, 0, isDefault};
+		app.parameters.push_back(p);
+	}
+
+	catalog::ComObject o;
+	o.id = u"O-0"_s;
+	o.number = 0;
+	o.sizeInBit = 16; // the generic object; the active ref makes it 1 bit
+	o.flags = catalog::ComObjectFlags{true, true, true, true, true, false};
+	app.comObjects.push_back(o);
+	catalog::ComObjectRef r;
+	r.id = u"O-0_R-42"_s;
+	r.refId = u"O-0"_s;
+	r.sizeInBit = 1;
+	r.read = false;
+	r.update = false;
+	app.comObjectRefs.push_back(r);
+
+	app.dynamic = node(DynamicKind::Root, u"Dynamic"_s, {},
+		{choose(u"P-Internal_R"_s, {otherwise({paramRef(u"P-Edge_R"_s), objectRef(u"O-0_R-42"_s)})})});
+	return app;
+}
+
+} // namespace
+
+UNIT_TEST(FR_DEV_1__chooseOnInternalParameterAlwaysCounts)
+{
+	// Converted pre-ETS4 programs branch on hidden "Dummy" parameters that no ParameterRefRef shows.
+	const auto evaluation = evaluate(system2Program(), {}).value();
+	ASSERT_EQ(evaluation.parameterRefs, QStringList{u"P-Edge_R"_s});
+	ASSERT_EQ(evaluation.comObjectRefs, QStringList{u"O-0_R-42"_s});
+}
+
+UNIT_TEST(FR_DEV_2__convertedProgramWritesOnlyActiveParameters)
+{
+	auto app = system2Program();
+	auto evaluation = evaluate(app, {}).value();
+	QStringList warnings;
+	// <Data> aa 09 01 00: P-Always (patched always) 5, the union keeps its data, P-Locked's default 2 is not
+	// written over the 01, P-Edge active at 10.
+	ASSERT_EQ(buildParameterSegments(app, {}, evaluation, warnings).value().at(u"AS-02F0"_s), hex("05 09 01 0a"));
+
+	// Not converted: every default, but in a union only the DefaultUnionParameter's.
+	app.attributes.erase(u"ConvertedFromPreEts4Data"_s);
+	for (catalog::Parameter& parameter : app.parameters)
+		parameter.attributes.erase(u"LegacyPatchAlways"_s);
+	evaluation = evaluate(app, {}).value();
+	ASSERT_EQ(buildParameterSegments(app, {}, evaluation, warnings).value().at(u"AS-02F0"_s), hex("05 06 02 0a"));
+	ASSERT(warnings.isEmpty());
+}
+
+UNIT_TEST(FR_COM_2__system2Tables)
+{
+	const auto app = system2Program();
+	// Object 0 sends on 1/0/6 and listens to 2/0/6; the device is 15.15.3.
+	const Links links{{0, {0x0806, 0x1006}}};
+	const auto images = buildSystem2(app, {}, links, 0xFF03).value();
+	ASSERT_EQ(images.segments.at(0x0116), hex("03 ff 03 08 06 10 06 00"));
+	ASSERT_EQ(images.segments.at(0x019C), hex("02 01 00 02 00 02 02 00"));
+	// Pointers and bit 5 kept: object 0 (data ff) C W T + low, 1 bit; object 1 has no active ref, so only its bit 5
+	// (clear in its data df) and low priority; the code after the table untouched.
+	ASSERT_EQ(images.segments.at(0x0234), hex("02 bd 02 77 00 04 03 07 7f"));
+	ASSERT_EQ(programVersion(u"M-FFFF"_s, app), hex("00 0c 12 2a 12")); // the original manufacturer
+	ASSERT(images.warnings.isEmpty());
+
+	// Too many links for the association table.
+	const Links many{{0, {0x0001, 0x0002, 0x0003, 0x0004}}};
+	ASSERT(!buildSystem2(app, {}, many, 0xFF03).has_value());
+}

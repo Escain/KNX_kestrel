@@ -1,5 +1,7 @@
 #include "kestrel/download/Plan.hpp"
 
+#include <algorithm>
+
 namespace kestrel::download
 {
 
@@ -37,6 +39,20 @@ struct StepPrinter
 	{
 		os << "AllocRelSegment LSM " << int(s.lsm) << " size " << s.size << " mode " << int(s.mode) << " fill "
 		   << int(s.fill);
+	}
+	void operator()(const AdditionalLoadControl& s) const
+	{
+		os << "LoadControl LSM " << int(s.lsm) << " [" << toHex(s.data) << "]";
+	}
+	void operator()(const WriteMem& s) const
+	{
+		const char* digits = "0123456789abcdef";
+		os << "WriteMem 0x";
+		for (int shift = 12; shift >= 0; shift -= 4)
+		{
+			os << digits[(s.address >> shift) & 0xF];
+		}
+		os << " size " << s.data.size() << (s.verify ? " (verify)" : "");
 	}
 	void operator()(const WriteRelMem& s) const
 	{
@@ -88,6 +104,14 @@ Bytes allocRelSegmentPayload(const AllocRelSegment& step)
 	writer.u8(step.fill);
 	writer.u8(0);
 	writer.u8(0);
+	return out;
+}
+
+Bytes additionalLoadControlPayload(std::uint8_t type, ByteView parameters)
+{
+	Bytes out{static_cast<std::uint8_t>(LoadEvent::AdditionalLoadControl), type};
+	out.insert(out.end(), parameters.begin(), parameters.end());
+	out.resize(std::max<std::size_t>(out.size(), 10), 0x00);
 	return out;
 }
 

@@ -849,9 +849,35 @@ std::optional<download::Plan> downloadPlan(Invocation& inv, int& exitCode)
 		const QByteArray content = file.readAll();
 		images[static_cast<std::uint8_t>(object)] = Bytes(content.begin(), content.end());
 	}
-	if (images.empty())
+	// System 2: files named seg<hex address>.bin, e.g. "seg0116.bin" (written with the segments' <Mask>).
+	std::map<std::uint16_t, Bytes> absoluteImages;
+	std::map<std::uint16_t, Bytes> absoluteMasks;
+	for (const QString& name : dir.entryList({u"seg*.bin"_s}, QDir::Files, QDir::Name))
 	{
-		return fail(u"no obj<N>* image files in %1"_s.arg(dir.path()), u"NotFound"_s, kExitFindings);
+		bool ok = false;
+		const uint address = name.mid(3, name.size() - 7).toUInt(&ok, 16);
+		if (!ok || address > 0xFFFF)
+		{
+			continue;
+		}
+		QFile file(dir.filePath(name));
+		if (!file.open(QIODevice::ReadOnly))
+		{
+			return fail(u"cannot read %1"_s.arg(file.fileName()), u"IoError"_s, kExitFindings);
+		}
+		const QByteArray content = file.readAll();
+		absoluteImages[static_cast<std::uint16_t>(address)] = Bytes(content.begin(), content.end());
+	}
+	for (const catalog::AbsoluteSegment& segment : program->absoluteSegments)
+	{
+		if (segment.mask && segment.address <= 0xFFFF)
+		{
+			absoluteMasks[static_cast<std::uint16_t>(segment.address)] = Bytes(segment.mask->begin(), segment.mask->end());
+		}
+	}
+	if (images.empty() && absoluteImages.empty())
+	{
+		return fail(u"no obj<N>* or seg<address>.bin image files in %1"_s.arg(dir.path()), u"NotFound"_s, kExitFindings);
 	}
 	// PID_PROGRAM_VERSION: manufacturer, application number, application version.
 	Bytes version;
@@ -868,12 +894,47 @@ std::optional<download::Plan> downloadPlan(Invocation& inv, int& exitCode)
 	{
 		version = appconfig::programVersion(database.manufacturerId, *program);
 	}
-	auto plan = appconfig::planDownload(database, *program, std::move(images), version, inv.value(u"procedure"_s));
+	auto plan = appconfig::planDownload(database, *program, std::move(images), version, inv.value(u"procedure"_s),
+		std::move(absoluteImages), std::move(absoluteMasks));
 	if (!plan)
 	{
 		return fail(qs(plan.error().message), QString::fromLatin1(toString(plan.error().code)), kExitFindings);
 	}
 	return std::move(*plan);
+}
+
+int deviceMemoryWrite(Invocation& inv)
+{
+	int exitCode = kExitOk;
+	const auto device = parseIa(inv, inv.args[0], exitCode);
+	if (!device)
+	{
+		return exitCode;
+	}
+	const auto address = parseNumber(inv.args[1], 0xFFFF);
+	auto data = fromHex(inv.args[2].toStdString());
+	if (!address || !data || data->empty() || *address + data->size() > 0x10000)
+	{
+		return inv.out.failure(kExitUsage, u"invalid address or data (hex octets in the 16-bit range)"_s, u"Usage"_s);
+	}
+	// Authorize (devices refuse writes otherwise), write, read back.
+	download::Plan plan{{download::Authorize{}, download::WriteMem{static_cast<std::uint16_t>(*address), *data, true}}, {}};
+	return withSession(inv,
+		[&](app::BusSession& session, const std::function<void(int)>& finish)
+		{
+			session.download(*device, plan,
+				[&, finish](Status status)
+				{
+					if (!status)
+					{
+						finish(inv.out.failure(busExitCode(status.error()), status.error()));
+						return;
+					}
+					finish(inv.out.success({{u"address"_s, static_cast<int>(*address)}},
+						u"wrote and verified %1 octet(s) at 0x%2"_s.arg(data->size()).arg(*address, 4, 16, QLatin1Char('0'))));
+				},
+				[](std::size_t, std::size_t, const QString&) {});
+		});
 }
 
 int deviceDownload(Invocation& inv)
@@ -1330,6 +1391,10 @@ int projectDownload(Invocation& inv)
 	{
 		inv.out.note(u"warning: "_s + warning);
 	}
+	for (const std::string& warning : planned->plan.warnings)
+	{
+		inv.out.note(u"note: "_s + qs(warning));
+	}
 	if (inv.isSet(u"save-images"_s))
 	{
 		const QDir dir(inv.value(u"save-images"_s));
@@ -1337,6 +1402,16 @@ int projectDownload(Invocation& inv)
 		for (const auto& [object, image] : planned->images)
 		{
 			QFile file(dir.filePath(u"obj%1.bin"_s.arg(object)));
+			if (!file.open(QIODevice::WriteOnly)
+				|| file.write(reinterpret_cast<const char*>(image.data()), static_cast<qint64>(image.size()))
+					!= static_cast<qint64>(image.size()))
+			{
+				return inv.out.failure(kExitIo, u"cannot write %1"_s.arg(file.fileName()), u"IoError"_s);
+			}
+		}
+		for (const auto& [segment, image] : planned->absoluteImages)
+		{
+			QFile file(dir.filePath(u"seg%1.bin"_s.arg(segment, 4, 16, QLatin1Char('0'))));
 			if (!file.open(QIODevice::WriteOnly)
 				|| file.write(reinterpret_cast<const char*>(image.data()), static_cast<qint64>(image.size()))
 					!= static_cast<qint64>(image.size()))
@@ -1432,6 +1507,9 @@ std::vector<Command> busCommands()
 			u"Read a property value as hex (read-only)."_s, {kInterfaceOption, propCount, propStart}, deviceProperty},
 		{{u"device"_s, u"memory"_s}, {u"ia"_s, u"address"_s, u"length"_s},
 			u"Read device memory as a hex dump (read-only; numbers may be 0x-hex)."_s, {kInterfaceOption}, deviceMemory},
+		{{u"device"_s, u"memory-write"_s}, {u"ia"_s, u"address"_s, u"hex"_s},
+			u"Write octets to device memory and read them back (expert repair). Writes to the device!"_s,
+			{kInterfaceOption}, deviceMemoryWrite},
 		{{u"device"_s, u"download"_s}, {u"ia"_s},
 			u"Download segment images with the product file's load procedure (FR-COM-2). Writes to the device!"_s,
 			{kInterfaceOption, knxprod, images, application, procedure, programVersion, dryRun}, deviceDownload},

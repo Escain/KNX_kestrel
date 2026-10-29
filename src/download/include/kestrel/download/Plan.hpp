@@ -10,11 +10,25 @@
 // - A relative segment's memory address is PID_TABLE_REFERENCE (7) once it is allocated.
 // - PID_MCB_TABLE (27) holds one memory control block per segment: size (4 octets, big endian), 0x00, 0xFF,
 //   CRC-16/AUG-CCITT of the segment (2 octets).
+//
+// System 2 (mask 0021, BCU 2) allocates absolute segments with additional load controls (event 3, then a type
+// octet; 10 octets in all, zero padded):
+//   0x00 absolute segment     address(2) size(2) access mem-type attributes
+//   0x02 task segment         address(2) PEI type(1) application id: manufacturer(2) number(2) version(1)
+//   0x03 task pointers        init(2) save(2) serial(2)
+//   0x04 task control 1       address(2) count(1)
+//   0x05 task control 2       callback(2) address(2) segment 0(2) segment 1(2)
+// The application id of the task segment is what PID_PROGRAM_VERSION reports afterwards: a Merten MTN670804
+// loaded by ETS reports 00 0c 12 2a 11 (the original manufacturer's id); written without the octet before the
+// id, it reported the payload shifted by one octet. Segment data is written with
+// A_Memory_Write at the segment's address; a segment allocated with attribute bit 0x80 ends in the XOR of its
+// other octets.
 
 #include "kestrel/base/Bytes.hpp"
 
 #include <cstdint>
 #include <ostream>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -96,6 +110,24 @@ struct WriteRelMem
 	friend bool operator==(const WriteRelMem&, const WriteRelMem&) = default;
 };
 
+/// Another additional load control (event 3), e.g. a System 2 segment allocation; `data` is the whole
+/// 10-octet PID_LOAD_STATE_CONTROL payload. The device answers "loading".
+struct AdditionalLoadControl
+{
+	std::uint8_t lsm = 0;
+	Bytes data;
+	friend bool operator==(const AdditionalLoadControl&, const AdditionalLoadControl&) = default;
+};
+
+/// Writes `data` at an absolute memory address (System 2 segments).
+struct WriteMem
+{
+	std::uint16_t address = 0;
+	Bytes data;
+	bool verify = true;
+	friend bool operator==(const WriteMem&, const WriteMem&) = default;
+};
+
 struct WriteProp
 {
 	std::uint8_t object = 0;
@@ -127,20 +159,25 @@ struct Restart
 	friend bool operator==(const Restart&, const Restart&) = default;
 };
 
+// New alternatives go at the end: the index is part of a plan's recorded hash (viewmodels::planHash).
 using Step = std::variant<Authorize, Unload, Load, LoadCompleted, AllocRelSegment, WriteRelMem, WriteProp, CompareProp,
-	LoadImageProp, Restart>;
+	LoadImageProp, Restart, AdditionalLoadControl, WriteMem>;
 
 std::ostream& operator<<(std::ostream& os, const Step& step);
 
 struct Plan
 {
 	std::vector<Step> steps;
+	/// Procedure elements that were left out, and why.
+	std::vector<std::string> warnings;
 	friend bool operator==(const Plan&, const Plan&) = default;
 };
 
 /// PID_LOAD_STATE_CONTROL payload for a step that drives the load state machine (always 10 octets).
 Bytes loadControlPayload(LoadEvent event);
 Bytes allocRelSegmentPayload(const AllocRelSegment& step);
+/// Event 3 with `type` and its parameters, zero padded to 10 octets.
+Bytes additionalLoadControlPayload(std::uint8_t type, ByteView parameters);
 
 /// CRC-16/AUG-CCITT (poly 0x1021, init 0x1D0F, no reflection, no final xor).
 std::uint16_t crc16AugCcitt(ByteView data);

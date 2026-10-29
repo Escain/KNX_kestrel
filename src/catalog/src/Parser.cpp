@@ -677,6 +677,20 @@ void DocumentParser::parseCode(ApplicationProgram& app)
 						warn(u"%1: invalid base64 in <Data>"_s.arg(segment.id));
 					}
 				}
+				else if (is(u"Mask"))
+				{
+					QByteArray base64 = m_xml.readElementText(QXmlStreamReader::SkipChildElements).toLatin1();
+					base64.removeIf([](char c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; });
+					auto decoded = QByteArray::fromBase64Encoding(base64, QByteArray::AbortOnBase64DecodingErrors);
+					if (decoded)
+					{
+						segment.mask = *decoded;
+					}
+					else
+					{
+						warn(u"%1: invalid base64 in <Mask>"_s.arg(segment.id));
+					}
+				}
 				else
 				{
 					skip();

@@ -165,6 +165,17 @@ QString planHash(const download::Plan& plan)
 					w.u8(s.object);
 					w.u8(s.pid);
 				}
+				else if constexpr (std::is_same_v<T, AdditionalLoadControl>)
+				{
+					w.u8(s.lsm);
+					w.bytes(s.data);
+				}
+				else if constexpr (std::is_same_v<T, WriteMem>)
+				{
+					w.u32(s.address);
+					w.bytes(s.data);
+					w.flag(s.verify);
+				}
 				else if constexpr (!std::is_same_v<T, Restart>)
 				{
 					// A step type added later: its printed form still identifies it.

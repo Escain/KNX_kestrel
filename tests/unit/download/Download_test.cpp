@@ -193,7 +193,7 @@ UNIT_TEST(FR_COM_2__resolverMergesAndSizesSystemBProcedure)
 UNIT_TEST(FR_COM_2__resolverRejectsUnknownElementsAndMissingImages)
 {
 	auto input = testInput();
-	input.procedure.insert(input.procedure.begin(), ld("LdCtrlTaskSegment", {{"LsmIdx", "4"}, {"Address", "16384"}}));
+	input.procedure.insert(input.procedure.begin(), ld("LdCtrlInvokeFunctionProp", {{"ObjIdx", "4"}, {"PropId", "64"}}));
 	auto plan = resolve(input);
 	ASSERT(!plan.has_value());
 	ASSERT_EQ(plan.error().code, ErrorCode::Unsupported);
@@ -231,7 +231,7 @@ UNIT_TEST(FR_COM_2__downloadStopsOnUnexpectedLoadState)
 {
 	// LoadCompleted without Load: the device goes to "error"; nothing after that step may run.
 	Harness h;
-	Plan plan{{Authorize{}, Unload{4, false}, LoadCompleted{4}, WriteProp{4, 13, hex("01 02 03 04 05"), true}, Restart{}}};
+	Plan plan{{Authorize{}, Unload{4, false}, LoadCompleted{4}, WriteProp{4, 13, hex("01 02 03 04 05"), true}, Restart{}}, {}};
 	Executor executor(knx::IndividualAddress(kDevice), plan);
 	const Status status = h.run(executor);
 	ASSERT(!status.has_value());
@@ -246,10 +246,10 @@ UNIT_TEST(FR_COM_2__toleratedUnloadFailureContinues)
 {
 	// Object 6 does not exist: the refused unload is mapped to success, as LdCtrlMapError asks.
 	Harness h;
-	Plan plan{{Authorize{}, Unload{6, true}, Unload{4, false}}};
+	Plan plan{{Authorize{}, Unload{6, true}, Unload{4, false}}, {}};
 	Executor executor(knx::IndividualAddress(kDevice), plan);
 	ASSERT(h.run(executor).has_value());
-	Plan strict{{Authorize{}, Unload{6, false}}};
+	Plan strict{{Authorize{}, Unload{6, false}}, {}};
 	Harness h2;
 	Executor failing(knx::IndividualAddress(kDevice), strict);
 	ASSERT(!h2.run(failing).has_value());
@@ -259,13 +259,65 @@ UNIT_TEST(FR_COM_2__systemBWritesNeedAuthorization)
 {
 	// Seen on a real System B actuator: property writes are refused until A_Authorize (default key).
 	Harness h;
-	Executor unauthorized(knx::IndividualAddress(kDevice), Plan{{Unload{4, false}}});
+	Executor unauthorized(knx::IndividualAddress(kDevice), Plan{{Unload{4, false}}, {}});
 	const Status status = h.run(unauthorized);
 	ASSERT(!status.has_value());
 	ASSERT(status.error().message.find("refused") != std::string::npos);
 
 	Harness h2;
-	Executor authorized(knx::IndividualAddress(kDevice), Plan{{Authorize{}, Unload{4, false}}});
+	Executor authorized(knx::IndividualAddress(kDevice), Plan{{Authorize{}, Unload{4, false}}, {}});
 	ASSERT(h2.run(authorized).has_value());
 	ASSERT_EQ(authorized.accessLevel(), std::optional<std::uint8_t>(0));
+}
+
+UNIT_TEST(FR_COM_2__resolverSystem2AbsoluteSegmentsAndTasks)
+{
+	// The MTN670804 (mask 0021) procedure's load controls; the steps after the restart are left out.
+	ResolveInput input;
+	input.applicationId = hex("00 0c 12 2a 12");
+	input.absoluteImages[0x0116] = hex("02 ff 03 08 06");
+	input.procedure = {ld("LdCtrlConnect", {}),
+		ld("LdCtrlWriteProp", {{"ObjIdx", "0"}, {"PropId", "8"}, {"Verify", "false"}, {"InlineData", "00000000000000000000"}}),
+		ld("LdCtrlLoad", {{"LsmIdx", "1"}}),
+		ld("LdCtrlAbsSegment", {{"LsmIdx", "1"}, {"SegType", "0"}, {"Address", "278"}, {"Size", "134"}, {"Access", "49"},
+			{"MemType", "3"}, {"SegFlags", "128"}}),
+		ld("LdCtrlTaskSegment", {{"LsmIdx", "1"}, {"Address", "278"}}),
+		ld("LdCtrlLoadCompleted", {{"LsmIdx", "1"}}),
+		ld("LdCtrlAbsSegment", {{"LsmIdx", "3"}, {"SegType", "0"}, {"Address", "189"}, {"Size", "35"}, {"Access", "48"},
+			{"MemType", "1"}, {"SegFlags", "0"}}),
+		ld("LdCtrlTaskPtr", {{"LsmIdx", "3"}, {"InitPtr", "681"}, {"SavePtr", "681"}, {"SerialPtr", "0"}}),
+		ld("LdCtrlTaskCtrl1", {{"LsmIdx", "3"}, {"Address", "682"}, {"Count", "1"}}),
+		ld("LdCtrlTaskCtrl2", {{"LsmIdx", "3"}, {"Callback", "20609"}, {"Address", "564"}, {"Seg0", "189"}, {"Seg1", "2418"}}),
+		ld("LdCtrlRestart", {}), ld("LdCtrlTaskSegment", {{"LsmIdx", "5"}, {"Address", "564"}}),
+		ld("LdCtrlLoad", {{"LsmIdx", "5"}}), ld("LdCtrlDisconnect", {})};
+	const auto plan = resolve(input);
+	ASSERT(plan.has_value());
+	// SegFlags 0x80: the segment is written whole, its last octet the XOR of the others.
+	Bytes checksummed = hex("02 ff 03 08 06");
+	checksummed.resize(134, 0);
+	checksummed.back() = 0x02 ^ 0xff ^ 0x03 ^ 0x08 ^ 0x06;
+	const std::vector<Step> expected{Authorize{}, WriteProp{0, 8, hex("00 00 00 00 00 00 00 00 00 00"), false}, Load{1},
+		AdditionalLoadControl{1, hex("03 00 01 16 00 86 31 03 80 00")}, WriteMem{0x0116, checksummed, true},
+		AdditionalLoadControl{1, hex("03 02 01 16 00 00 0c 12 2a 12")}, LoadCompleted{1},
+		AdditionalLoadControl{3, hex("03 00 00 bd 00 23 30 01 00 00")}, // RAM: allocated, not written
+		AdditionalLoadControl{3, hex("03 03 02 a9 02 a9 00 00 00 00")},
+		AdditionalLoadControl{3, hex("03 04 02 aa 01 00 00 00 00 00")},
+		AdditionalLoadControl{3, hex("03 05 50 81 02 34 00 bd 09 72")}, Restart{}};
+	ASSERT_EQ(plan->steps, expected);
+	ASSERT_EQ(plan->warnings.size(), std::size_t{2});
+}
+
+UNIT_TEST(FR_COM_2__resolverWritesOnlyTheMaskedOctets)
+{
+	// A BCU header: the device owns the octets the <Mask> leaves out (ids, run-error flags, pointers).
+	ResolveInput input;
+	input.absoluteImages[0x0100] = hex("ff 00 00 00 00 00 00 00 00 00 11 22 33 00 e0 63 e0 00");
+	input.absoluteMasks[0x0100] = hex("ff 00 00 00 00 00 00 00 00 00 ff ff ff 00 ff ff ff 00");
+	input.procedure = {ld("LdCtrlAbsSegment", {{"LsmIdx", "3"}, {"SegType", "0"}, {"Address", "256"}, {"Size", "18"},
+		{"Access", "48"}, {"MemType", "3"}, {"SegFlags", "0"}})};
+	const auto plan = resolve(input);
+	ASSERT(plan.has_value());
+	const std::vector<Step> expected{AdditionalLoadControl{3, hex("03 00 01 00 00 12 30 03 00 00")},
+		WriteMem{0x0100, hex("ff"), true}, WriteMem{0x010A, hex("11 22 33"), true}, WriteMem{0x010E, hex("e0 63 e0"), true}};
+	ASSERT_EQ(plan->steps, expected);
 }

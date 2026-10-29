@@ -22,7 +22,8 @@ std::vector<download::LdCtrl> toLdCtrls(const std::vector<catalog::LoadControl>&
 }
 
 Result<download::Plan> planDownload(const catalog::ProductDatabase& database, const catalog::ApplicationProgram& app,
-	std::map<std::uint8_t, Bytes> images, const Bytes& programVersion, const QString& subType)
+	std::map<std::uint8_t, Bytes> images, const Bytes& programVersion, const QString& subType,
+	std::map<std::uint16_t, Bytes> absoluteImages, std::map<std::uint16_t, Bytes> absoluteMasks)
 {
 	download::ResolveInput input;
 	if (app.loadProcedureStyle == u"ProductProcedure")
@@ -68,18 +69,43 @@ Result<download::Plan> planDownload(const catalog::ProductDatabase& database, co
 	}
 	input.images = std::move(images);
 	input.programVersions[4] = programVersion;
+	input.absoluteImages = std::move(absoluteImages);
+	input.absoluteMasks = std::move(absoluteMasks);
+	input.applicationId = programVersion;
+	input.peiType = static_cast<std::uint8_t>(app.peiType);
 	return download::resolve(input);
+}
+
+bool canPlanDownload(const QString& maskVersion)
+{
+	return maskVersion == u"MV-07B0" || maskVersion == u"MV-0021";
 }
 
 Result<DevicePlan> planDeviceDownload(const catalog::ProductDatabase& database, const catalog::ApplicationProgram& app,
 	const model::Project& project, model::Id<model::Device> device, const QString& subType)
 {
-	if (app.maskVersion != u"MV-07B0")
+	if (!canPlanDownload(app.maskVersion))
 	{
-		return makeError(ErrorCode::Unsupported,
-			"downloads for mask " + app.maskVersion.toStdString() + " are not supported yet (System B only)");
+		return makeError(ErrorCode::Unsupported, "downloads for mask " + app.maskVersion.toStdString()
+				+ " are not supported yet (System B MV-07B0 and System 2 MV-0021)");
 	}
 	KESTREL_TRY(DeviceConfiguration configuration, deviceConfiguration(project, device, app));
+	if (app.maskVersion == u"MV-0021")
+	{
+		const auto address = project.individualAddress(device);
+		if (!address)
+		{
+			return makeError(ErrorCode::InvalidArgument, "the device has no individual address yet");
+		}
+		KESTREL_TRY(System2Images built, buildSystem2(app, configuration.values, configuration.links, address->raw()));
+		DevicePlan result;
+		result.warnings = configuration.warnings + built.warnings;
+		result.absoluteImages = built.segments;
+		KESTREL_TRY(download::Plan plan, planDownload(database, app, {}, programVersion(database.manufacturerId, app),
+												 subType, std::move(built.segments), std::move(built.masks)));
+		result.plan = std::move(plan);
+		return result;
+	}
 	KESTREL_TRY(SystemBImages built, buildSystemB(app, configuration.values, configuration.links));
 	DevicePlan result;
 	result.warnings = configuration.warnings + built.warnings;

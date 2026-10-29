@@ -34,6 +34,15 @@ struct ResolveInput
 	std::map<std::uint8_t, Bytes> images;
 	/// Value written for PID_PROGRAM_VERSION per object, replacing the procedure's placeholder InlineData.
 	std::map<std::uint8_t, Bytes> programVersions;
+	/// System 2: image per absolute segment address, written right after the segment is allocated. Only
+	/// EEPROM segments (MemType 3) are written; RAM segments are only allocated.
+	std::map<std::uint16_t, Bytes> absoluteImages;
+	/// System 2: the segment's <Mask> per address; only octets with a non-zero mask are written (in runs).
+	std::map<std::uint16_t, Bytes> absoluteMasks;
+	/// System 2: application id of the task segments (manufacturer(2), number(2), version(1)) and the octet
+	/// before it (the program's PEI type).
+	Bytes applicationId;
+	std::uint8_t peiType = 0;
 };
 
 /// Errors: Unsupported (unknown LdCtrl element), InvalidArgument (missing image, bad attribute).

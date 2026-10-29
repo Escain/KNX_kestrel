@@ -130,6 +130,9 @@ struct AbsoluteSegment
 	unsigned address = 0;
 	unsigned size = 0;
 	std::optional<QByteArray> data; ///< decoded <Data> (base64 in the XML)
+	/// decoded <Mask>: the bits of the segment the tool writes; the others belong to the device (e.g. a BCU's
+	/// run-error flags and its own individual address)
+	std::optional<QByteArray> mask;
 	AttributeMap attributes;
 
 	friend bool operator==(const AbsoluteSegment&, const AbsoluteSegment&) = default;

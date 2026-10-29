@@ -114,9 +114,21 @@ Result<std::map<QString, Bytes>> buildParameterSegments(const catalog::Applicati
 		}
 		return ok();
 	};
-	// 1. Every parameter at its own default, active or not.
+	// 1. Every parameter at its own default, active or not, except members of a union other than its
+	//    DefaultUnionParameter (they share its memory). A program converted from pre-ETS4 data has its default
+	//    image in the <Data> already: only parameters with LegacyPatchAlways="true" are written while inactive.
+	//    (A Merten MTN670804 sent nothing with the defaults of hidden locking parameters written, and 0x3f instead of
+	//    1 with an 8-bit union member's default over its 1-bit value.)
+	const bool legacy = attributeOf(app.attributes, u"ConvertedFromPreEts4Data"_s) == u"true"
+		|| attributeOf(app.attributes, u"PreEts4Style"_s) == u"true";
 	for (const catalog::Parameter& parameter : app.parameters)
 	{
+		const QString patchAlways = attributeOf(parameter.attributes, u"LegacyPatchAlways"_s);
+		if (legacy ? patchAlways != u"true"
+				   : (parameter.unionMember && !parameter.unionMember->isDefault) || patchAlways == u"false")
+		{
+			continue;
+		}
 		KESTREL_CHECK(write(parameter, parameter.value));
 	}
 	// 2. The active ParameterRefs at their value (user value, ref default, parameter default).
@@ -242,7 +254,13 @@ Bytes buildAddressTable(const std::vector<std::uint16_t>& addresses)
 	return out;
 }
 
-Bytes buildAssociationTable(const Links& links, const std::vector<std::uint16_t>& addressTable)
+namespace
+{
+
+constexpr unsigned kValueSegmentBit = 0x20; ///< System 2 config bit 5: which segment the value pointer is in
+
+std::vector<std::pair<std::uint16_t, unsigned>> associations(const Links& links,
+	const std::vector<std::uint16_t>& addressTable)
 {
 	struct Entry
 	{
@@ -272,12 +290,73 @@ Bytes buildAssociationTable(const Links& links, const std::vector<std::uint16_t>
 			}
 			return a.object != b.object ? a.object < b.object : a.index < b.index;
 		});
-	Bytes out;
-	putU16(out, static_cast<std::uint16_t>(entries.size()));
+	std::vector<std::pair<std::uint16_t, unsigned>> out;
+	out.reserve(entries.size());
 	for (const Entry& entry : entries)
 	{
-		putU16(out, entry.index);
-		putU16(out, static_cast<std::uint16_t>(entry.object));
+		out.emplace_back(entry.index, entry.object);
+	}
+	return out;
+}
+
+
+/// The links of active objects (object numbers that some active ComObjectRef uses); the others are reported.
+Links activeLinks(const catalog::ApplicationProgram& app, const Evaluation& evaluation, const Links& links,
+	bool objectZeroAllowed, QStringList& warnings)
+{
+	std::set<unsigned> activeNumbers;
+	for (const QString& refId : evaluation.comObjectRefs)
+	{
+		const catalog::ComObjectRef* ref = app.findComObjectRef(refId);
+		if (const catalog::ComObject* object = ref ? app.findComObject(ref->refId) : nullptr)
+		{
+			activeNumbers.insert(object->number);
+		}
+	}
+	Links active;
+	for (const auto& [object, addresses] : links)
+	{
+		if (object == 0 && !objectZeroAllowed)
+		{
+			warnings.append(u"group object 0 cannot be loaded on System B (objects are numbered from 1)"_s);
+			continue;
+		}
+		if (!activeNumbers.contains(object))
+		{
+			warnings.append(u"group object %1 is not active with these parameters; its links are not loaded"_s.arg(object));
+			continue;
+		}
+		active[object] = addresses;
+	}
+	return active;
+}
+
+Result<Bytes*> placement(std::map<QString, Bytes>& segments, const std::optional<catalog::TablePlacement>& table,
+	const char* what, std::size_t size)
+{
+	if (!table)
+	{
+		return makeError(ErrorCode::InvalidArgument, std::string("the application has no ") + what);
+	}
+	const auto segment = segments.find(table->codeSegment);
+	if (segment == segments.end() || table->offset + size > segment->second.size())
+	{
+		return makeError(ErrorCode::InvalidArgument, std::string(what) + " does not fit its code segment");
+	}
+	return &segment->second;
+}
+
+} // namespace
+
+Bytes buildAssociationTable(const Links& links, const std::vector<std::uint16_t>& addressTable)
+{
+	const auto entries = associations(links, addressTable);
+	Bytes out;
+	putU16(out, static_cast<std::uint16_t>(entries.size()));
+	for (const auto& [index, object] : entries)
+	{
+		putU16(out, index);
+		putU16(out, static_cast<std::uint16_t>(object));
 	}
 	return out;
 }
@@ -293,31 +372,10 @@ Result<SystemBImages> buildSystemB(const catalog::ApplicationProgram& app, const
 	}
 
 	// Links of objects that are not active are dropped (ETS keeps them in the project but does not load them).
-	std::set<unsigned> activeNumbers;
-	for (const QString& refId : evaluation.comObjectRefs)
-	{
-		const catalog::ComObjectRef* ref = app.findComObjectRef(refId);
-		if (const catalog::ComObject* object = ref ? app.findComObject(ref->refId) : nullptr)
-		{
-			activeNumbers.insert(object->number);
-		}
-	}
-	Links active;
+	const Links active = activeLinks(app, evaluation, links, false, result.warnings);
 	std::set<std::uint16_t> addressSet;
-	for (const auto& [object, addresses] : links)
+	for (const auto& [object, addresses] : active)
 	{
-		if (object == 0)
-		{
-			result.warnings.append(u"group object 0 cannot be loaded on System B (objects are numbered from 1)"_s);
-			continue;
-		}
-		if (!activeNumbers.contains(object))
-		{
-			result.warnings.append(u"group object %1 is not active with these parameters; its links are not loaded"_s
-					.arg(object));
-			continue;
-		}
-		active[object] = addresses;
 		addressSet.insert(addresses.begin(), addresses.end());
 	}
 	const std::vector<std::uint16_t> addressTable(addressSet.begin(), addressSet.end());
@@ -345,9 +403,142 @@ Result<SystemBImages> buildSystemB(const catalog::ApplicationProgram& app, const
 	return result;
 }
 
+
+Result<System2Images> buildSystem2(const catalog::ApplicationProgram& app, const ParameterValues& values,
+	const Links& links, std::uint16_t individualAddress)
+{
+	System2Images result;
+	KESTREL_TRY(const Evaluation evaluation, evaluate(app, values));
+	for (const QString& warning : evaluation.warnings)
+	{
+		result.warnings.append(warning);
+	}
+	const Links active = activeLinks(app, evaluation, links, true, result.warnings);
+	std::set<std::uint16_t> addressSet;
+	for (const auto& [object, addresses] : active)
+	{
+		addressSet.insert(addresses.begin(), addresses.end());
+	}
+	const std::vector<std::uint16_t> addresses(addressSet.begin(), addressSet.end());
+	if (addresses.size() > 254 || (app.addressTable && app.addressTable->maxEntries
+			&& addresses.size() > *app.addressTable->maxEntries))
+	{
+		return makeError(ErrorCode::InvalidArgument, "more group addresses than the device's address table holds");
+	}
+	const auto entries = associations(active, addresses);
+	if (entries.size() > 255 || (app.associationTable && app.associationTable->maxEntries
+			&& entries.size() > *app.associationTable->maxEntries))
+	{
+		return makeError(ErrorCode::InvalidArgument, "more links than the device's association table holds");
+	}
+
+	// Every absolute segment at its <Data>, with the parameters written over it.
+	KESTREL_TRY(auto segments, buildParameterSegments(app, values, evaluation, result.warnings));
+
+	// Address table: count (with the device's own address), own address, group addresses ascending.
+	{
+		const std::size_t size = 3 + 2 * addresses.size();
+		KESTREL_TRY(Bytes* segment, placement(segments, app.addressTable, "address table", size));
+		Bytes table;
+		table.push_back(static_cast<std::uint8_t>(addresses.size() + 1));
+		putU16(table, individualAddress);
+		for (const std::uint16_t address : addresses)
+		{
+			putU16(table, address);
+		}
+		std::copy(table.begin(), table.end(), segment->begin() + app.addressTable->offset);
+	}
+	// Association table: count, then (connection number = address table index, own address 0; object number).
+	{
+		const std::size_t size = 1 + 2 * entries.size();
+		KESTREL_TRY(Bytes* segment, placement(segments, app.associationTable, "association table", size));
+		Bytes table{static_cast<std::uint8_t>(entries.size())};
+		for (const auto& [index, object] : entries)
+		{
+			table.push_back(static_cast<std::uint8_t>(index));
+			table.push_back(static_cast<std::uint8_t>(object));
+		}
+		std::copy(table.begin(), table.end(), segment->begin() + app.associationTable->offset);
+	}
+	// Group object table: count, RAM flags pointer, then per object value pointer, config, type. The pointers
+	// stay as the segment's <Data> has them; config and type follow the active ComObjectRef.
+	{
+		KESTREL_TRY(Bytes* segment, placement(segments, app.comObjectTable, "group object table", 2));
+		const std::size_t base = app.comObjectTable->offset;
+		const unsigned count = (*segment)[base];
+		if (base + 2 + 3 * std::size_t{count} > segment->size())
+		{
+			return makeError(ErrorCode::InvalidArgument, "group object table does not fit its code segment");
+		}
+		std::set<unsigned> done;
+		for (const QString& refId : evaluation.comObjectRefs)
+		{
+			const catalog::ComObjectRef* ref = app.findComObjectRef(refId);
+			const catalog::ComObject* object = ref ? app.findComObject(ref->refId) : nullptr;
+			if (!object || object->number >= count || !done.insert(object->number).second)
+			{
+				continue; // the first active ref of a number defines it
+			}
+			const unsigned size = ref->sizeInBit.value_or(object->sizeInBit);
+			const auto type = typeCode(size);
+			if (!type)
+			{
+				return makeError(ErrorCode::Unsupported,
+					"group object " + std::to_string(object->number) + ": size of " + std::to_string(size) + " bits");
+			}
+			const std::size_t entry = base + 2 + 3 * std::size_t{object->number};
+			const bool linked = active.contains(object->number) && !active.at(object->number).empty();
+			unsigned config = (*segment)[entry + 1] & kValueSegmentBit;
+			config |= ref->update.value_or(object->flags.update) ? 0x80u : 0u;
+			config |= ref->transmit.value_or(object->flags.transmit) ? 0x40u : 0u;
+			config |= ref->write.value_or(object->flags.write) ? 0x10u : 0u;
+			config |= ref->read.value_or(object->flags.read) ? 0x08u : 0u;
+			config |= ref->communication.value_or(object->flags.communication) && linked ? 0x04u : 0u;
+			QString priority = attributeOf(ref->attributes, u"Priority"_s);
+			if (priority.isEmpty())
+			{
+				priority = attributeOf(object->attributes, u"Priority"_s);
+			}
+			config |= priorityCode(priority);
+			(*segment)[entry + 1] = static_cast<std::uint8_t>(config);
+			(*segment)[entry + 2] = *type;
+		}
+		for (unsigned number = 0; number < count; ++number)
+		{
+			if (!done.contains(number))
+			{
+				// Inactive: no communication, value location and type as the <Data> has them.
+				const std::size_t entry = base + 2 + 3 * std::size_t{number};
+				(*segment)[entry + 1] = static_cast<std::uint8_t>(((*segment)[entry + 1] & kValueSegmentBit) | 0x03u);
+			}
+		}
+	}
+	for (const catalog::AbsoluteSegment& segment : app.absoluteSegments)
+	{
+		if (segment.address > 0xFFFF)
+		{
+			return makeError(ErrorCode::Unsupported, "absolute segment beyond 64 KiB");
+		}
+		result.segments[static_cast<std::uint16_t>(segment.address)] = std::move(segments[segment.id]);
+		if (segment.mask)
+		{
+			result.masks[static_cast<std::uint16_t>(segment.address)] = toBytes(*segment.mask);
+		}
+	}
+	return result;
+}
+
+QString originalManufacturer(const QString& manufacturerId, const catalog::ApplicationProgram& app)
+{
+	// An OEM program carries its original manufacturer, and the device reports that one (a Merten MTN670804
+	// in Schneider's M-0064 file reports 000C).
+	const QString original = attributeOf(app.attributes, u"OriginalManufacturer"_s);
+	return original.isEmpty() ? manufacturerId : original;
+}
+
 Bytes programVersion(const QString& manufacturerId, const catalog::ApplicationProgram& app)
 {
-	const uint manufacturer = manufacturerId.mid(2).toUInt(nullptr, 16);
+	const uint manufacturer = originalManufacturer(manufacturerId, app).mid(2).toUInt(nullptr, 16);
 	return {static_cast<std::uint8_t>(manufacturer >> 8), static_cast<std::uint8_t>(manufacturer),
 		static_cast<std::uint8_t>(app.applicationNumber >> 8), static_cast<std::uint8_t>(app.applicationNumber),
 		static_cast<std::uint8_t>(app.applicationVersion)};

@@ -64,7 +64,31 @@ struct SystemBImages
 Result<SystemBImages> buildSystemB(const catalog::ApplicationProgram& app, const ParameterValues& values,
 	const Links& links);
 
-/// PID_PROGRAM_VERSION of an application: manufacturer (from "M-XXXX"), application number, version.
+/// System 2 (mask 0021, BCU 2): every absolute segment at its address, starting from the segment's <Data>:
+/// - Address table (8-bit count including the device's own address, own address, group addresses ascending).
+/// - Association table (8-bit count, then connection number = address table index, object number; sending
+///   links first, as for System B).
+/// - Group object table (count, RAM flags pointer, 3 octets per object: value pointer, config, type). Pointers
+///   and config bit 5 stay as the <Data> has them; the other config bits (U 0x80, T 0x40, W 0x10, R 0x08,
+///   C 0x04 only when linked, priority) and the type follow the active ComObjectRef. Inactive objects keep
+///   bit 5 and the type, with no flags and low priority.
+/// - Parameters written over the segments that hold them.
+struct System2Images
+{
+	std::map<std::uint16_t, Bytes> segments;
+	std::map<std::uint16_t, Bytes> masks; ///< the segments' <Mask> (which octets the tool writes)
+	QStringList warnings;
+};
+
+Result<System2Images> buildSystem2(const catalog::ApplicationProgram& app, const ParameterValues& values,
+	const Links& links, std::uint16_t individualAddress);
+
+/// The manufacturer a device reports for `app`: the program's OriginalManufacturer (OEM programs), else the
+/// file's manufacturer.
+QString originalManufacturer(const QString& manufacturerId, const catalog::ApplicationProgram& app);
+
+/// PID_PROGRAM_VERSION of an application (also the System 2 task segment's application id): manufacturer
+/// (originalManufacturer(), "M-XXXX"), application number, version.
 Bytes programVersion(const QString& manufacturerId, const catalog::ApplicationProgram& app);
 
 } // namespace kestrel::appconfig
