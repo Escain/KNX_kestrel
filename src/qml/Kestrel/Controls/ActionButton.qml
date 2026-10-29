@@ -14,6 +14,12 @@ ToolButton {
 	enabled: actions.revision >= 0 && actions.isEnabled(actionId)
 	focusPolicy: Qt.NoFocus
 	display: AbstractButton.TextOnly
+	font.weight: Font.Medium
+	implicitHeight: 28
+	background: Rectangle {
+		radius: Theme.radius
+		color: control.down ? Theme.border : control.hovered ? Theme.hover : "transparent"
+	}
 	Accessible.name: text
 	onClicked: actions.trigger(actionId)
 }

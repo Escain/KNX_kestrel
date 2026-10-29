@@ -27,6 +27,7 @@
 class QLabel;
 
 class QQmlEngine;
+class QToolBar;
 class QToolButton;
 
 namespace kestrel::viewmodels
@@ -85,12 +86,15 @@ public:
 
 protected:
 	void closeEvent(QCloseEvent* event) override;
+	void changeEvent(QEvent* event) override;
 
 private:
 	void createActions();
 	void createMenus();
 	void createDocks();
 	void createStatusBar();
+	/// The tool bar and menu icons in the theme's colours (again after a palette change).
+	void applyIcons();
 	QmlDock* addQmlDock(const QString& id, const QString& title, const QString& type, QObject* viewModel);
 	void showContextMenu(const QStringList& ids);
 	bool maybeSave();
@@ -100,6 +104,7 @@ private:
 	void updateStatus();
 	void restoreLayout();
 	void saveLayout();
+	void updateDockTitles();
 
 	MainWindowOptions m_options;
 	std::unique_ptr<QQmlEngine> m_engine;
@@ -113,6 +118,7 @@ private:
 	QMenu* m_busMenu = nullptr;
 	QMenu* m_commissioningMenu = nullptr;
 	QMenu* m_helpMenu = nullptr;
+	QToolBar* m_toolBar = nullptr;
 	QLabel* m_dirtyLabel = nullptr;
 	QToolButton* m_problemsButton = nullptr;
 	QPointer<QMenu> m_lastContextMenu;

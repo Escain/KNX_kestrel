@@ -27,33 +27,35 @@ Pane {
 
 			ColumnLayout {
 				Layout.fillWidth: true
-				Layout.margins: 10
-				spacing: 2
+				Layout.leftMargin: Theme.pad
+				Layout.rightMargin: Theme.pad
+				Layout.topMargin: 14
+				Layout.bottomMargin: 4
+				spacing: 4
 
-				Label {
+				SectionLabel {
 					objectName: "properties.kind"
 					text: root.vm.kindLabel
-					opacity: 0.7
 				}
 				Label {
 					objectName: "properties.title"
 					Layout.fillWidth: true
 					text: root.vm.title
-					font.bold: true
-					font.pixelSize: 15
+					font.weight: Font.DemiBold
+					font.pixelSize: 16
 					elide: Text.ElideRight
 				}
 			}
 
 			GridLayout {
 				Layout.fillWidth: true
-				Layout.leftMargin: 10
-				Layout.rightMargin: 10
-				columns: 2
-				columnSpacing: 8
-				rowSpacing: 6
+				Layout.leftMargin: Theme.pad
+				Layout.rightMargin: Theme.pad
+				// Labels above their fields.
+				columns: 1
+				rowSpacing: 4
 
-				Label {
+				FieldLabel {
 					text: qsTr("Name")
 				}
 				TextField {
@@ -65,7 +67,7 @@ Pane {
 					onEditingFinished: root.vm.setName(text)
 				}
 
-				Label {
+				FieldLabel {
 					visible: root.vm.numberVisible
 					text: qsTr("Number")
 				}
@@ -87,7 +89,7 @@ Pane {
 					}
 				}
 
-				Label {
+				FieldLabel {
 					visible: root.vm.address !== ""
 					text: qsTr("Address")
 				}
@@ -98,7 +100,7 @@ Pane {
 					text: root.vm.address
 				}
 
-				Label {
+				FieldLabel {
 					visible: root.vm.dptVisible
 					text: qsTr("DPT")
 				}
@@ -112,7 +114,7 @@ Pane {
 					onEditingFinished: root.vm.setDpt(text)
 				}
 
-				Label {
+				FieldLabel {
 					visible: root.vm.placeVisible
 					text: qsTr("Location")
 				}
@@ -126,9 +128,8 @@ Pane {
 					onActivated: index => root.vm.setPlaceIndex(index)
 				}
 
-				Label {
+				FieldLabel {
 					visible: root.vm.gaStyleVisible
-					Layout.alignment: Qt.AlignTop
 					text: qsTr("Group addresses")
 				}
 				ColumnLayout {
@@ -149,9 +150,8 @@ Pane {
 					}
 				}
 
-				Label {
+				FieldLabel {
 					visible: root.vm.descriptionEditable
-					Layout.alignment: Qt.AlignTop
 					text: root.vm.descriptionLabel
 				}
 				TextArea {
@@ -162,6 +162,11 @@ Pane {
 					visible: root.vm.descriptionEditable
 					wrapMode: TextEdit.Wrap
 					text: root.vm.description
+					background: Rectangle {
+						radius: 2
+						color: Theme.panel
+						border.color: parent.activeFocus ? Theme.accent : Theme.borderStrong
+					}
 					onEditingFinished: root.vm.setDescription(text)
 				}
 			}
@@ -169,19 +174,28 @@ Pane {
 			Label {
 				objectName: "properties.details"
 				Layout.fillWidth: true
-				Layout.leftMargin: 10
-				Layout.rightMargin: 10
+				Layout.leftMargin: Theme.pad
+				Layout.rightMargin: Theme.pad
+				Layout.topMargin: 8
 				visible: text !== ""
 				text: root.vm.details
-				opacity: 0.8
+				color: Theme.textSecondary
+				lineHeight: 1.3
 				wrapMode: Text.Wrap
 			}
 
 			ErrorBanner {
 				Layout.fillWidth: true
-				Layout.margins: 10
+				Layout.margins: Theme.pad
 				vm: root.vm
 			}
 		}
+	}
+
+	component FieldLabel: Label {
+		Layout.topMargin: 8
+		font.pixelSize: 12
+		font.weight: Font.Medium
+		color: Theme.textSecondary
 	}
 }

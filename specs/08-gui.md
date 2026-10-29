@@ -144,7 +144,39 @@ Until a new result arrives, the previous one is shown, so typing in the paramete
 flickers. A burst of edits costs one computation. Results of a batch that started before the project was replaced, the
 catalog changed or the planner changed are discarded.
 
-## 6. Hooks
+## 6. Look
+
+A flat workbench look: white panels on a grey gutter, one accent, and colour reserved for state.
+The design is the "Kestrel UI redesign" canvas (Claude Design); the code is the reference.
+
+- **One palette for widgets and QML.** `shell::initializeStyle()` sets Fusion and an application `QPalette` built
+  from `shell::Theme` (light or dark, following the system colour scheme; `KESTREL_COLOR_SCHEME=dark|light`
+  overrides it). Qt Quick's Fusion takes its colours from the platform theme, not from the application palette, so
+  `QmlHost` copies the palette onto each scene's content item (`QQuickPalette` properties); the root item inherits
+  it.
+- **Chrome** (menu bar, tool bar, docks, tabs, status bar) is styled by the application style sheet
+  (`shell::styleSheet`). Dock tabs are on top. A tabbed dock hides its title bar (the tab names it); a dock on its
+  own keeps it. Download is the tool bar's primary action (accent button).
+- **Icons** are Kestrel's own stroke SVGs (`src/shell/icons`), recoloured from the theme by `shell::themedIcon`, so
+  they do not depend on the desktop icon theme.
+- **QML tokens** come from the `Kestrel.Controls` `Theme` singleton: the palette roles, plus the colours a palette
+  has no role for (selection tint, hover, status colours and their backgrounds), repeated from `shell::Theme`.
+  Shared controls: `PanelToolBar`, `HeaderCell` (table headers), `TableCell` (rows with the selection tint and an
+  accent bar), `Badge` (status), `AddressChip` (monospaced addresses), `SectionLabel`, `UnderlineTabBar` /
+  `UnderlineTabButton`.
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| gutter | `#EEF0F3` | `#0F1216` | main window background |
+| panel | `#FFFFFF` | `#171B21` | panels, tool bar, menus |
+| panelAlt | `#F6F7F9` | `#1D222A` | headers, tab strips |
+| border / borderStrong | `#E1E4E9` / `#D5D9E0` | `#2A3039` / `#3A424D` | separators / inputs |
+| text / secondary / disabled | `#1B2230` / `#5B6472` / `#A3AAB5` | `#E4E7EC` / `#9AA3B0` / `#5E6774` | |
+| accent | `#0B6E99` | `#3FA4CF` | selection bar, primary action, focus |
+| selection | `#E6F1F6` on `#08506F` | `#17323F` on `#CDE8F4` | selected rows |
+| warning / success / error | `#B45309` / `#1E7B3E` / `#B42318` | `#F59E0B` / `#34C26B` / `#F87171` | state only |
+
+## 7. Hooks
 
 ```cpp
 // kestrel/viewmodels/ConfigurationHooks.hpp
@@ -155,7 +187,7 @@ void Workspace::setActiveComObjectFilter(ActiveComObjectFilter);  // default act
 void Workspace::setDownloadPlanner(DownloadPlanner);              // default catalogDownloadPlanner(catalog())
 ```
 
-## 7. Tests
+## 8. Tests
 - `qt.viewmodels.CatalogViewModels`: import, index reuse, bad files, filter, add to line with undo, drop on Topology,
   active com objects, linking and unlinking with undo, parameters that change the active objects. Also: needs download
   (planner off the GUI thread, debounced) and inactive linked objects (greyed, CO-101). Opt-in timing
@@ -167,7 +199,7 @@ void Workspace::setDownloadPlanner(DownloadPlanner);              // default cat
 - `qt.shell.MainWindow`: every dock loads its view; the catalog dock, catalog device editor and commissioning dock
   in the real window (screenshots with `KESTREL_SCREENSHOT_DIR`).
 
-## 8. Open points
+## 9. Open points
 - Drag and drop uses `Drag.Automatic` (a platform drag between QQuickWidgets). The tests cover the drop intents, not
   the mouse gesture, which has only been checked offscreen.
 - Catalog texts are indexed in en-US. The device editor uses the project's content language.

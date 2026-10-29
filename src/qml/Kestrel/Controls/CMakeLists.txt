@@ -1,4 +1,5 @@
 qt_add_library(kestrel_qml_controls STATIC)
+set_source_files_properties(Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(kestrel_qml_controls
 	URI Kestrel.Controls
 	VERSION 1.0
@@ -7,6 +8,15 @@ qt_add_qml_module(kestrel_qml_controls
 	DEPENDENCIES QtQuick QtQuick.Controls Kestrel.ViewModels
 	QML_FILES
 		ActionButton.qml
+		AddressChip.qml
+		Badge.qml
+		HeaderCell.qml
+		PanelToolBar.qml
+		SectionLabel.qml
+		TableCell.qml
+		Theme.qml
+		UnderlineTabBar.qml
+		UnderlineTabButton.qml
 		EntityTreeView.qml
 		ErrorBanner.qml
 		TreePanel.qml

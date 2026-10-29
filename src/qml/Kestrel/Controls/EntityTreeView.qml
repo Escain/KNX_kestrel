@@ -17,6 +17,8 @@ Item {
 	property real secondaryColumnWidth: 72
 	/// Optional per-column widths of columns 1.. (overrides secondaryColumnWidth).
 	property list<real> secondaryColumnWidths
+	/// Columns shown in the monospaced font (addresses).
+	property list<int> monoColumns
 	/// Levels expanded when a project is shown.
 	property int initialDepth: 2
 
@@ -49,6 +51,7 @@ Item {
 		anchors.top: parent.top
 		syncView: tree
 		clip: true
+		delegate: HeaderCell {}
 	}
 
 	TreeView {
@@ -86,6 +89,21 @@ Item {
 		delegate: TreeViewDelegate {
 			id: cell
 			Accessible.name: String(cell.model.display ?? "")
+			implicitHeight: Theme.rowHeight
+			leftMargin: 6
+			font.family: root.monoColumns.indexOf(cell.column) >= 0 ? Theme.monoFamily : Qt.application.font.family
+
+			background: Rectangle {
+				color: cell.selected ? Theme.selection : Theme.panel
+				Rectangle {
+					visible: cell.selected && cell.column === 0
+					width: 2
+					height: parent.height
+					color: Theme.accent
+				}
+			}
+			palette.highlightedText: Theme.selectionText
+			palette.text: Theme.text
 
 			// Rows the view model allows (e.g. group addresses) drag out as entity refs. Drag.Automatic runs a
 			// platform drag, so another dock (another QQuickWidget) can receive it.

@@ -15,6 +15,7 @@ Pane {
 	property list<string> toolActions
 	property real secondaryColumnWidth: 72
 	property list<real> secondaryColumnWidths
+	property list<int> monoColumns
 
 	padding: 0
 
@@ -22,22 +23,19 @@ Pane {
 		anchors.fill: parent
 		spacing: 0
 
-		ToolBar {
+		PanelToolBar {
 			Layout.fillWidth: true
 
-			Flow {
-				anchors.left: parent.left
-				anchors.right: parent.right
-				spacing: 2
-
-				Repeater {
-					model: root.toolActions
-					delegate: ActionButton {
-						required property string modelData
-						actions: root.vm.actions
-						actionId: modelData
-					}
+			Repeater {
+				model: root.toolActions
+				delegate: ActionButton {
+					required property string modelData
+					actions: root.vm.actions
+					actionId: modelData
 				}
+			}
+			Item {
+				Layout.fillWidth: true
 			}
 		}
 
@@ -54,6 +52,7 @@ Pane {
 			accessibleName: root.accessibleName
 			secondaryColumnWidth: root.secondaryColumnWidth
 			secondaryColumnWidths: root.secondaryColumnWidths
+			monoColumns: root.monoColumns
 		}
 	}
 }

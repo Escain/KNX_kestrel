@@ -19,6 +19,10 @@ Pane {
 	readonly property string refFormat: "application/x-kestrel-ref"
 
 	objectName: "deviceEditor"
+	padding: 0
+	background: Rectangle {
+		color: Theme.panel
+	}
 
 	function linkTyped() {
 		const text = gaField.editText.trim()
@@ -30,75 +34,111 @@ Pane {
 
 	ColumnLayout {
 		anchors.fill: parent
-		spacing: 8
+		spacing: 0
 
-		Label {
-			objectName: "deviceEditor.title"
+		// Header: name, address and download state; product and application below.
+		ColumnLayout {
 			Layout.fillWidth: true
-			text: root.vm.title
-			font.pixelSize: 18
-			font.bold: true
-			elide: Text.ElideRight
+			Layout.leftMargin: 20
+			Layout.rightMargin: 20
+			Layout.topMargin: 16
+			Layout.bottomMargin: 12
+			spacing: 4
+
+			RowLayout {
+				Layout.fillWidth: true
+				spacing: 10
+
+				Label {
+					objectName: "deviceEditor.title"
+					Layout.maximumWidth: Math.max(120, root.width - 360)
+					text: root.vm.name !== "" ? root.vm.name : root.vm.title
+					font.pixelSize: 18
+					font.weight: Font.DemiBold
+					elide: Text.ElideRight
+				}
+				AddressChip {
+					visible: root.vm.address !== "" && root.vm.name !== ""
+					text: root.vm.address
+				}
+				Badge {
+					objectName: "deviceEditor.downloadState"
+					visible: root.vm.downloadState !== ""
+					text: root.vm.needsDownload ? qsTr("Needs download") : root.vm.downloadState
+					tone: root.vm.needsDownload ? "warning" : "neutral"
+					ToolTip.visible: badgeHover.hovered
+					ToolTip.text: root.vm.downloadState
+
+					HoverHandler {
+						id: badgeHover
+					}
+				}
+				Item {
+					Layout.fillWidth: true
+				}
+			}
+
+			RowLayout {
+				objectName: "deviceEditor.product"
+				Layout.fillWidth: true
+				visible: root.vm.catalogDevice
+				spacing: 6
+
+				Label {
+					objectName: "deviceEditor.productText"
+					Layout.fillWidth: true
+					Layout.maximumWidth: implicitWidth
+					elide: Text.ElideRight
+					color: Theme.textSecondary
+					text: root.vm.orderNumber !== "" ? qsTr("%1 (%2)").arg(root.vm.productText).arg(root.vm.orderNumber)
+						: root.vm.productText
+				}
+				Label {
+					visible: root.vm.applicationText !== ""
+					text: "·"
+					color: Theme.textSecondary
+				}
+				Label {
+					objectName: "deviceEditor.applicationText"
+					Layout.fillWidth: true
+					elide: Text.ElideRight
+					color: Theme.textSecondary
+					text: root.vm.applicationText
+				}
+			}
 		}
 
-		GridLayout {
-			objectName: "deviceEditor.product"
+		Rectangle {
 			Layout.fillWidth: true
-			visible: root.vm.catalogDevice
-			columns: 2
-			columnSpacing: 12
-			rowSpacing: 2
-
-			Label {
-				text: qsTr("Product")
-				opacity: 0.7
-			}
-			Label {
-				objectName: "deviceEditor.productText"
-				Layout.fillWidth: true
-				elide: Text.ElideRight
-				text: root.vm.orderNumber !== "" ? qsTr("%1  (%2)").arg(root.vm.productText).arg(root.vm.orderNumber)
-					: root.vm.productText
-			}
-			Label {
-				text: qsTr("Application")
-				opacity: 0.7
-			}
-			Label {
-				objectName: "deviceEditor.applicationText"
-				Layout.fillWidth: true
-				elide: Text.ElideRight
-				text: root.vm.applicationText
-			}
-			Label {
-				text: qsTr("Download")
-				opacity: 0.7
-				visible: root.vm.downloadState !== ""
-			}
-			Label {
-				objectName: "deviceEditor.downloadState"
-				Layout.fillWidth: true
-				visible: text !== ""
-				elide: Text.ElideRight
-				text: root.vm.downloadState
-				font.bold: root.vm.needsDownload
-				color: root.vm.needsDownload ? "#ef6c00" : palette.windowText
-			}
-		}
-
-		Label {
-			objectName: "deviceEditor.inactiveWarning"
-			Layout.fillWidth: true
+			Layout.leftMargin: 20
+			Layout.rightMargin: 20
+			Layout.bottomMargin: Theme.gap
 			visible: root.vm.catalogDevice && root.vm.inactiveLinkedCount > 0
-			wrapMode: Text.Wrap
-			color: "#ef6c00"
-			text: root.vm.inactiveLinkedCount === 1
-				? qsTr("1 linked group object is not active with the current parameters (greyed): its group addresses are kept but not downloaded.")
-				: qsTr("%1 linked group objects are not active with the current parameters (greyed): their group addresses are kept but not downloaded.").arg(root.vm.inactiveLinkedCount)
+			implicitHeight: inactiveWarning.implicitHeight + 12
+			radius: Theme.radius
+			color: Theme.warningBg
+
+			Label {
+				id: inactiveWarning
+				objectName: "deviceEditor.inactiveWarning"
+				anchors.left: parent.left
+				anchors.right: parent.right
+				anchors.verticalCenter: parent.verticalCenter
+				anchors.leftMargin: 10
+				anchors.rightMargin: 10
+				wrapMode: Text.Wrap
+				color: Theme.warning
+				text: root.vm.inactiveLinkedCount === 1
+					? qsTr("1 linked group object is not active with the current parameters (greyed): its group addresses are kept but not downloaded.")
+					: qsTr("%1 linked group objects are not active with the current parameters (greyed): their group addresses are kept but not downloaded.").arg(root.vm.inactiveLinkedCount)
+			}
 		}
 
 		RowLayout {
 			Layout.fillWidth: true
+			Layout.leftMargin: 20
+			Layout.rightMargin: 20
+			Layout.bottomMargin: Theme.gap
 			visible: root.vm.catalogDevice && !root.catalogTable
 			spacing: 8
 
@@ -113,26 +153,35 @@ Pane {
 				Layout.fillWidth: true
 				text: root.vm.catalogMessage
 				wrapMode: Text.Wrap
-				color: root.vm.catalogState === "loading" ? palette.windowText : "#c62828"
+				color: root.vm.catalogState === "loading" ? Theme.textSecondary : Theme.error
 			}
 		}
 
-		TabBar {
+		UnderlineTabBar {
 			id: tabs
 			objectName: "deviceEditor.tabs"
 			Layout.fillWidth: true
+			leftPadding: 20
 			visible: root.catalogTable
 
-			TabButton {
+			UnderlineTabButton {
 				objectName: "deviceEditor.objectsTab"
-				Accessible.name: text
 				text: qsTr("Group Objects")
+				count: String(table.rows)
 			}
-			TabButton {
+			UnderlineTabButton {
 				objectName: "deviceEditor.parametersTab"
-				Accessible.name: text
-				text: qsTr("Parameters (%1)").arg(root.vm.parameterCount)
+				text: qsTr("Parameters")
+				count: String(root.vm.parameterCount)
 			}
+		}
+
+		Rectangle {
+			// Manual devices have no tabs: a hairline separates the header from the table.
+			Layout.fillWidth: true
+			visible: !root.catalogTable
+			implicitHeight: 1
+			color: Theme.border
 		}
 
 		StackLayout {
@@ -141,11 +190,18 @@ Pane {
 			currentIndex: root.catalogTable ? tabs.currentIndex : 0
 
 			ColumnLayout {
-				spacing: 8
+				spacing: 0
 
 				Label {
-					text: root.catalogTable ? qsTr("Group objects (drop a group address on a row to link it)") : qsTr("Group objects")
-					font.bold: true
+					Layout.fillWidth: true
+					Layout.leftMargin: 20
+					Layout.rightMargin: 20
+					Layout.topMargin: Theme.gap
+					Layout.bottomMargin: Theme.gap
+					text: qsTr("Drop a group address from the Group Addresses panel on a row to link it.")
+					font.pixelSize: 12
+					color: Theme.textSecondary
+					elide: Text.ElideRight
 				}
 
 				HorizontalHeaderView {
@@ -154,6 +210,7 @@ Pane {
 					Layout.fillWidth: true
 					syncView: table
 					clip: true
+					delegate: HeaderCell {}
 				}
 
 				Item {
@@ -184,11 +241,13 @@ Pane {
 						}
 
 						property int dropRow: -1
-
 						// Catalog: # | Text | Function | Channel | Size | Flags | DPT | Group addresses
 						// Manual:  # | Name | Function | Size | Flags | DPT | Group addresses
+						readonly property int addressColumn: root.catalogTable ? 7 : 6
+						readonly property list<int> monoColumns: root.catalogTable ? [0, 5, 6] : [0, 4, 5]
+
 						columnWidthProvider: column => {
-							const fixed = root.catalogTable ? [44, 0, 0, 0, 64, 60, 90, 0] : [44, 0, 0, 70, 60, 90, 0]
+							const fixed = root.catalogTable ? [52, 0, 0, 0, 64, 64, 96, 0] : [52, 0, 0, 70, 64, 96, 0]
 							const share = root.catalogTable ? [0, 0.25, 0.2, 0.2, 0, 0, 0, 0.35] : [0, 0.3, 0.3, 0, 0, 0, 0.4]
 							const used = fixed.reduce((a, b) => a + b, 0)
 							const rest = Math.max(300, table.width - used)
@@ -199,7 +258,7 @@ Pane {
 
 						ScrollBar.vertical: ScrollBar {}
 
-						delegate: Rectangle {
+						delegate: Item {
 							id: cell
 
 							required property string display
@@ -210,23 +269,43 @@ Pane {
 							required property bool editing
 							required property bool inactive
 
-							implicitHeight: label.implicitHeight + 10
-							opacity: cell.inactive ? 0.45 : 1
-							color: cell.row === table.dropRow ? table.palette.highlight
-								: cell.selected ? table.palette.highlight
-								: (cell.row % 2 ? table.palette.alternateBase : table.palette.base)
+							readonly property bool addresses: cell.column === table.addressColumn
+
+							implicitHeight: Theme.rowHeight + 2
+							implicitWidth: cellView.implicitWidth
 							Accessible.name: cell.display
 
-							Label {
-								id: label
+							TableCell {
+								id: cellView
 								anchors.fill: parent
-								anchors.leftMargin: 6
-								anchors.rightMargin: 6
 								visible: !cell.editing
-								verticalAlignment: Text.AlignVCenter
-								elide: Text.ElideRight
-								text: cell.display
-								color: cell.selected || cell.row === table.dropRow ? table.palette.highlightedText : table.palette.text
+								text: cell.addresses ? "" : cell.display
+								selected: cell.selected || cell.row === table.dropRow
+								firstColumn: cell.column === 0
+								dimmed: cell.inactive
+								mono: table.monoColumns.indexOf(cell.column) >= 0
+							}
+
+							// Group addresses as chips, the sending one (listed first) emphasised.
+							Row {
+								visible: cell.addresses && !cell.editing
+								anchors.left: parent.left
+								anchors.right: parent.right
+								anchors.leftMargin: 10
+								anchors.verticalCenter: parent.verticalCenter
+								spacing: 4
+								clip: true
+								opacity: cell.inactive ? 0.5 : 1
+
+								Repeater {
+									model: cell.addresses && cell.display !== "" ? cell.display.split(", ") : []
+									delegate: AddressChip {
+										required property string modelData
+										required property int index
+										text: modelData
+										emphasis: index === 0
+									}
+								}
 							}
 
 							TableView.editDelegate: TextField {
@@ -268,88 +347,134 @@ Pane {
 						anchors.centerIn: table
 						visible: table.rows === 0 && (!root.vm.catalogDevice || root.catalogTable)
 						text: root.catalogTable ? qsTr("The application has no active group objects.") : qsTr("No group objects yet.")
-						opacity: 0.6
+						color: Theme.textSecondary
 					}
 				}
 
-				GroupBox {
-					title: qsTr("New group object")
+				// Manual devices: define a new group object.
+				Rectangle {
 					Layout.fillWidth: true
 					visible: !root.vm.catalogDevice
+					implicitHeight: newObject.implicitHeight + 2 * Theme.pad
+					color: Theme.panel
 
-					RowLayout {
+					Rectangle {
+						anchors.left: parent.left
+						anchors.right: parent.right
+						anchors.top: parent.top
+						height: 1
+						color: Theme.border
+					}
+
+					ColumnLayout {
+						id: newObject
 						anchors.fill: parent
+						anchors.margins: Theme.pad
+						anchors.leftMargin: 20
+						anchors.rightMargin: 20
 						spacing: 6
 
-						TextField {
-							id: newName
-							objectName: "deviceEditor.newName"
-							Accessible.name: qsTr("Name of the new group object")
+						SectionLabel {
+							text: qsTr("New group object")
+						}
+
+						RowLayout {
 							Layout.fillWidth: true
-							placeholderText: qsTr("Name")
-						}
-						TextField {
-							id: newFunction
-							objectName: "deviceEditor.newFunction"
-							Accessible.name: qsTr("Function of the new group object")
-							Layout.fillWidth: true
-							placeholderText: qsTr("Function")
-						}
-						ComboBox {
-							id: newSize
-							objectName: "deviceEditor.newSize"
-							Accessible.name: qsTr("Size of the new group object")
-							model: root.vm.sizeOptions
-							textRole: "text"
-							valueRole: "value"
-						}
-						TextField {
-							id: newFlags
-							objectName: "deviceEditor.newFlags"
-							Accessible.name: qsTr("Flags of the new group object")
-							implicitWidth: 70
-							text: "CWT"
-							placeholderText: qsTr("Flags")
-						}
-						TextField {
-							id: newDpt
-							objectName: "deviceEditor.newDpt"
-							Accessible.name: qsTr("Datapoint type of the new group object")
-							implicitWidth: 100
-							placeholderText: qsTr("DPT")
-						}
-						Button {
-							objectName: "deviceEditor.add"
-							Accessible.name: text
-							text: qsTr("Add")
-							onClicked: {
-								if (root.vm.addComObject(newName.text, newFunction.text, newSize.currentValue, newFlags.text, newDpt.text) !== "") {
-									newName.clear()
-									newFunction.clear()
+							spacing: 6
+
+							TextField {
+								id: newName
+								objectName: "deviceEditor.newName"
+								Accessible.name: qsTr("Name of the new group object")
+								Layout.fillWidth: true
+								placeholderText: qsTr("Name")
+							}
+							TextField {
+								id: newFunction
+								objectName: "deviceEditor.newFunction"
+								Accessible.name: qsTr("Function of the new group object")
+								Layout.fillWidth: true
+								placeholderText: qsTr("Function")
+							}
+							ComboBox {
+								id: newSize
+								objectName: "deviceEditor.newSize"
+								Accessible.name: qsTr("Size of the new group object")
+								model: root.vm.sizeOptions
+								textRole: "text"
+								valueRole: "value"
+							}
+							TextField {
+								id: newFlags
+								objectName: "deviceEditor.newFlags"
+								Accessible.name: qsTr("Flags of the new group object")
+								implicitWidth: 70
+								text: "CWT"
+								placeholderText: qsTr("Flags")
+							}
+							TextField {
+								id: newDpt
+								objectName: "deviceEditor.newDpt"
+								Accessible.name: qsTr("Datapoint type of the new group object")
+								implicitWidth: 100
+								placeholderText: qsTr("DPT")
+							}
+							Button {
+								objectName: "deviceEditor.add"
+								Accessible.name: text
+								text: qsTr("Add")
+								onClicked: {
+									if (root.vm.addComObject(newName.text, newFunction.text, newSize.currentValue, newFlags.text, newDpt.text) !== "") {
+										newName.clear()
+										newFunction.clear()
+									}
 								}
 							}
 						}
 					}
 				}
 
-				GroupBox {
-					title: root.currentSubject === "" ? qsTr("Associations (select a group object)")
-						: qsTr("Associations of %1").arg(root.vm.currentLabel)
-					enabled: root.currentSubject !== ""
+				// Link bar: the selected object's group addresses and the address to link.
+				Rectangle {
 					Layout.fillWidth: true
+					implicitHeight: associations.implicitHeight + 2 * Theme.pad - 2
+					color: Theme.panelAlt
+
+					Rectangle {
+						anchors.left: parent.left
+						anchors.right: parent.right
+						anchors.top: parent.top
+						height: 1
+						color: Theme.border
+					}
 
 					ColumnLayout {
+						id: associations
 						anchors.fill: parent
-						spacing: 4
+						anchors.topMargin: Theme.pad - 2
+						anchors.bottomMargin: Theme.pad - 2
+						anchors.leftMargin: 20
+						anchors.rightMargin: 20
+						spacing: 6
 
 						RowLayout {
 							Layout.fillWidth: true
+							spacing: 8
 
+							Label {
+								Layout.fillWidth: true
+								elide: Text.ElideRight
+								text: root.currentSubject === "" ? qsTr("Select a group object to link group addresses")
+									: root.vm.currentLabel
+								font.weight: root.currentSubject === "" ? Font.Normal : Font.Medium
+								color: root.currentSubject === "" ? Theme.textSecondary : Theme.text
+							}
 							ComboBox {
 								id: gaField
 								objectName: "deviceEditor.groupAddress"
 								Accessible.name: qsTr("Group address to link: pick one or type a new address")
-								Layout.fillWidth: true
+								Layout.preferredWidth: Math.min(360, Math.max(220, root.width * 0.35))
+								enabled: root.currentSubject !== ""
 								editable: true
 								model: root.vm.groupAddressOptions
 								textRole: "text"
@@ -367,13 +492,14 @@ Pane {
 								objectName: "deviceEditor.link"
 								Accessible.name: text
 								text: qsTr("Link")
-								enabled: gaField.editText.trim() !== ""
+								enabled: root.currentSubject !== "" && gaField.editText.trim() !== ""
 								onClicked: root.linkTyped()
 							}
 							Button {
 								objectName: "deviceEditor.remove"
 								Accessible.name: text
 								visible: !root.vm.catalogDevice
+								enabled: root.currentSubject !== ""
 								text: qsTr("Delete Object")
 								onClicked: root.vm.removeComObject(root.vm.current)
 							}
@@ -387,17 +513,27 @@ Pane {
 								required property var modelData
 
 								Layout.fillWidth: true
+								spacing: 8
 
+								AddressChip {
+									text: linkRow.modelData.address
+									emphasis: linkRow.modelData.sending
+								}
 								Label {
 									Layout.fillWidth: true
-									text: linkRow.modelData.address + "  " + linkRow.modelData.name
-										+ (linkRow.modelData.sending ? qsTr("  (sending)") : "")
+									text: linkRow.modelData.name
 									elide: Text.ElideRight
+								}
+								Badge {
+									visible: linkRow.modelData.sending
+									text: qsTr("sending")
+									tone: "info"
 								}
 								Button {
 									objectName: "deviceEditor.makeSending"
 									Accessible.name: text
 									text: qsTr("Make Sending")
+									flat: true
 									enabled: !linkRow.modelData.sending
 									onClicked: root.vm.setSending(linkRow.modelData.ref)
 								}
@@ -405,6 +541,7 @@ Pane {
 									objectName: "deviceEditor.unlink"
 									Accessible.name: text
 									text: qsTr("Unlink")
+									flat: true
 									onClicked: root.vm.unlink(linkRow.modelData.ref)
 								}
 							}
@@ -415,15 +552,19 @@ Pane {
 
 			// Parameters of a catalog device: active ParameterRefs grouped by channel and parameter block.
 			ColumnLayout {
-				spacing: 4
+				spacing: 0
 
 				Label {
 					objectName: "deviceEditor.parameterWarnings"
 					Layout.fillWidth: true
+					Layout.leftMargin: 20
+					Layout.rightMargin: 20
+					Layout.topMargin: Theme.gap
 					visible: text !== ""
 					text: root.vm.parameterWarnings
 					wrapMode: Text.Wrap
-					opacity: 0.7
+					font.pixelSize: 12
+					color: Theme.textSecondary
 				}
 
 				ListView {
@@ -433,10 +574,14 @@ Pane {
 					Accessible.role: Accessible.List
 					Layout.fillWidth: true
 					Layout.fillHeight: true
+					Layout.leftMargin: 20
+					Layout.rightMargin: 8
 					clip: true
 					boundsBehavior: Flickable.StopAtBounds
 					model: root.vm.parameters
 					spacing: 2
+					topMargin: Theme.gap
+					bottomMargin: Theme.pad
 					reuseItems: false
 					ScrollBar.vertical: ScrollBar {}
 
@@ -457,15 +602,26 @@ Pane {
 						required property string valueText
 
 						width: parameterList.width - 12
-						implicitHeight: param.kind === "block" ? blockLabel.implicitHeight + 10 : Math.max(32, row.implicitHeight)
+						implicitHeight: param.kind === "block" ? blockLabel.implicitHeight + 22 : Math.max(36, row.implicitHeight + 4)
 
+						// A parameter block: heading with a hairline, some air above.
 						Label {
 							id: blockLabel
 							visible: param.kind === "block"
 							x: param.depth * 16
 							anchors.bottom: parent.bottom
+							anchors.bottomMargin: 6
 							text: param.text
-							font.bold: true
+							font.weight: Font.DemiBold
+							color: Theme.text
+						}
+						Rectangle {
+							visible: param.kind === "block"
+							x: blockLabel.x
+							anchors.right: parent.right
+							anchors.bottom: parent.bottom
+							height: 1
+							color: Theme.border
 						}
 
 						RowLayout {
@@ -473,14 +629,17 @@ Pane {
 							visible: param.kind === "parameter"
 							anchors.left: parent.left
 							anchors.right: parent.right
+							anchors.verticalCenter: parent.verticalCenter
 							anchors.leftMargin: param.depth * 16
-							spacing: 8
+							spacing: 12
 
 							Label {
 								Layout.preferredWidth: Math.max(160, parameterList.width * 0.45 - param.depth * 16)
 								text: param.text
 								elide: Text.ElideRight
-								font.italic: !param.isDefault
+								// Changed values stand out from the defaults.
+								color: param.isDefault ? Theme.textSecondary : Theme.text
+								font.weight: param.isDefault ? Font.Normal : Font.Medium
 								ToolTip.visible: labelHover.hovered
 								ToolTip.text: param.text + (param.isDefault ? "" : qsTr(" (changed)"))
 
@@ -545,7 +704,7 @@ Pane {
 						anchors.centerIn: parent
 						visible: parameterList.count === 0
 						text: qsTr("No visible parameters.")
-						opacity: 0.6
+						color: Theme.textSecondary
 					}
 				}
 			}

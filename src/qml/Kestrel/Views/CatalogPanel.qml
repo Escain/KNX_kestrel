@@ -23,48 +23,44 @@ Pane {
 		anchors.fill: parent
 		spacing: 0
 
-		ToolBar {
+		PanelToolBar {
 			Layout.fillWidth: true
+			spacing: 4
 
-			RowLayout {
-				anchors.left: parent.left
-				anchors.right: parent.right
-				spacing: 4
-
-				ActionButton {
-					actions: root.vm.actions
-					actionId: "catalog.import"
-				}
-				ActionButton {
-					actions: root.vm.actions
-					actionId: "catalog.addToLine"
-				}
-				TextField {
-					id: filterField
-					objectName: "catalog.filter"
-					Accessible.name: qsTr("Filter products")
-					Layout.fillWidth: true
-					Layout.maximumWidth: 360
-					placeholderText: qsTr("Filter: product, order number, application…")
-					text: root.vm.filter
-					onTextEdited: root.vm.filter = text
-				}
-				BusyIndicator {
-					objectName: "catalog.busy"
-					Layout.preferredWidth: 22
-					Layout.preferredHeight: 22
-					running: root.vm.busy
-					visible: root.vm.busy
-				}
-				Label {
-					objectName: "catalog.target"
-					Layout.fillWidth: true
-					horizontalAlignment: Text.AlignRight
-					elide: Text.ElideLeft
-					opacity: 0.8
-					text: root.vm.target !== "" ? qsTr("Adds to line %1").arg(root.vm.target)
-						: qsTr("Select a line in Topology to add products")
-				}
+			ActionButton {
+				actions: root.vm.actions
+				actionId: "catalog.import"
+			}
+			ActionButton {
+				actions: root.vm.actions
+				actionId: "catalog.addToLine"
+			}
+			TextField {
+				id: filterField
+				objectName: "catalog.filter"
+				Accessible.name: qsTr("Filter products")
+				Layout.fillWidth: true
+				Layout.maximumWidth: 360
+				placeholderText: qsTr("Filter: product, order number, application…")
+				text: root.vm.filter
+				onTextEdited: root.vm.filter = text
+			}
+			BusyIndicator {
+				objectName: "catalog.busy"
+				Layout.preferredWidth: 22
+				Layout.preferredHeight: 22
+				running: root.vm.busy
+				visible: root.vm.busy
+			}
+			Label {
+				objectName: "catalog.target"
+				Layout.fillWidth: true
+				Layout.rightMargin: 6
+				horizontalAlignment: Text.AlignRight
+				elide: Text.ElideLeft
+				color: Theme.textSecondary
+				text: root.vm.target !== "" ? qsTr("Adds to line %1").arg(root.vm.target)
+					: qsTr("Select a line in Topology to add products")
 			}
 		}
 
@@ -79,6 +75,7 @@ Pane {
 			Layout.fillWidth: true
 			syncView: table
 			clip: true
+			delegate: HeaderCell {}
 		}
 
 		Item {
@@ -115,16 +112,17 @@ Pane {
 				Keys.onReturnPressed: root.vm.addToLine()
 				Keys.onEnterPressed: root.vm.addToLine()
 
-				delegate: Rectangle {
+				delegate: Item {
 					id: cell
 
 					required property string display
 					required property string key
 					required property int row
+					required property int column
 					required property bool selected
 
-					implicitHeight: label.implicitHeight + 10
-					color: cell.selected ? table.palette.highlight : (cell.row % 2 ? table.palette.alternateBase : table.palette.base)
+					implicitHeight: Theme.rowHeight
+					implicitWidth: cellView.implicitWidth
 					Accessible.name: cell.display
 
 					// Drag.Automatic runs a platform drag, so the Topology dock (another QQuickWidget) receives it.
@@ -139,15 +137,14 @@ Pane {
 						grabPermissions: PointerHandler.CanTakeOverFromAnything
 					}
 
-					Label {
-						id: label
+					TableCell {
+						id: cellView
 						anchors.fill: parent
-						anchors.leftMargin: 6
-						anchors.rightMargin: 6
-						verticalAlignment: Text.AlignVCenter
-						elide: Text.ElideRight
 						text: cell.display
-						color: cell.selected ? table.palette.highlightedText : table.palette.text
+						selected: cell.selected
+						firstColumn: cell.column === 0
+						// Order number and version.
+						mono: cell.column === 1 || cell.column === 3
 					}
 				}
 
@@ -167,25 +164,44 @@ Pane {
 				visible: table.rows === 0
 				horizontalAlignment: Text.AlignHCenter
 				wrapMode: Text.Wrap
-				opacity: 0.6
+				color: Theme.textSecondary
 				text: root.vm.busy ? qsTr("Reading product files…")
 					: root.vm.productCount === 0 ? qsTr("No products yet. Use “Import Product File…” to add a manufacturer's .knxprod file.")
 					: qsTr("No product matches the filter.")
 			}
 		}
 
-		Label {
-			objectName: "catalog.status"
+		Rectangle {
 			Layout.fillWidth: true
-			Layout.margins: 4
-			text: root.vm.status
-			elide: Text.ElideRight
-			opacity: 0.8
-			ToolTip.visible: statusHover.hovered && root.vm.problems !== ""
-			ToolTip.text: root.vm.problems
+			implicitHeight: statusLabel.implicitHeight + 12
+			color: Theme.panelAlt
 
-			HoverHandler {
-				id: statusHover
+			Rectangle {
+				anchors.left: parent.left
+				anchors.right: parent.right
+				anchors.top: parent.top
+				height: 1
+				color: Theme.border
+			}
+
+			Label {
+				id: statusLabel
+				objectName: "catalog.status"
+				anchors.left: parent.left
+				anchors.right: parent.right
+				anchors.verticalCenter: parent.verticalCenter
+				anchors.leftMargin: 10
+				anchors.rightMargin: 10
+				text: root.vm.status
+				elide: Text.ElideRight
+				font.pixelSize: 12
+				color: Theme.textSecondary
+				ToolTip.visible: statusHover.hovered && root.vm.problems !== ""
+				ToolTip.text: root.vm.problems
+
+				HoverHandler {
+					id: statusHover
+				}
 			}
 		}
 	}

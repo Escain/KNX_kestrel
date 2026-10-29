@@ -14,37 +14,54 @@ Pane {
 	required property BusConnectionVM vm
 
 	objectName: "busConnectionPanel"
-	padding: 8
+	padding: Theme.pad
 
 	// Two columns in a wide (bottom) dock, one column in a narrow (side) dock.
 	GridLayout {
 		anchors.fill: parent
 		columns: root.width > 560 ? 2 : 1
-		columnSpacing: 16
-		rowSpacing: 6
+		columnSpacing: 24
+		rowSpacing: 8
 
 		ColumnLayout {
 			Layout.fillWidth: true
 			Layout.alignment: Qt.AlignTop
 			Layout.preferredWidth: 1
-			spacing: 6
+			spacing: 8
 
-			RowLayout {
+			SectionLabel {
+				text: qsTr("Interface")
+			}
+			Rectangle {
+				readonly property string tone: root.vm.connected ? "success" : root.vm.connecting ? "warning" : "neutral"
+
+				id: statePill
 				Layout.fillWidth: true
-				spacing: 6
+				implicitHeight: 32
+				radius: 16
+				color: Theme.toneBackground(statePill.tone)
 
-				Rectangle {
-					implicitWidth: 10
-					implicitHeight: 10
-					radius: 5
-					color: root.vm.connected ? "#2e7d32" : root.vm.connecting ? "#ef6c00" : "#9e9e9e"
-				}
-				Label {
-					objectName: "bus.state"
-					Layout.fillWidth: true
-					text: root.vm.connected ? qsTr("%1 to %2:%3 as %4").arg(root.vm.state).arg(root.vm.host).arg(root.vm.port).arg(root.vm.localAddress)
-						: root.vm.state
-					elide: Text.ElideRight
+				RowLayout {
+					anchors.fill: parent
+					anchors.leftMargin: 12
+					anchors.rightMargin: 12
+					spacing: 8
+
+					Rectangle {
+						implicitWidth: 8
+						implicitHeight: 8
+						radius: 4
+						color: root.vm.connected || root.vm.connecting ? Theme.toneColor(statePill.tone) : Theme.textDisabled
+					}
+					Label {
+						objectName: "bus.state"
+						Layout.fillWidth: true
+						text: root.vm.connected ? qsTr("%1 to %2:%3 as %4").arg(root.vm.state).arg(root.vm.host).arg(root.vm.port).arg(root.vm.localAddress)
+							: root.vm.state
+						font.weight: Font.Medium
+						color: Theme.toneColor(statePill.tone)
+						elide: Text.ElideRight
+					}
 				}
 			}
 
@@ -78,6 +95,7 @@ Pane {
 				Button {
 					objectName: "bus.connect"
 					Accessible.name: text
+					highlighted: !root.vm.connected && !root.vm.connecting
 					text: root.vm.connected || root.vm.connecting ? qsTr("Disconnect") : qsTr("Connect")
 					onClicked: {
 						if (root.vm.connected || root.vm.connecting) {
@@ -105,15 +123,14 @@ Pane {
 			Layout.fillWidth: true
 			Layout.fillHeight: true
 			Layout.preferredWidth: 1
-			spacing: 6
+			spacing: 8
 
 			RowLayout {
 				Layout.fillWidth: true
 
-				Label {
+				SectionLabel {
 					Layout.fillWidth: true
 					text: qsTr("Interfaces on the network")
-					font.bold: true
 				}
 				Button {
 					objectName: "bus.discover"
@@ -134,6 +151,18 @@ Pane {
 				Layout.minimumHeight: 40
 				clip: true
 				model: root.vm.interfaces
+				topMargin: 1
+				bottomMargin: 1
+
+				Rectangle {
+					parent: interfaces
+					anchors.fill: parent
+					z: -1
+					radius: 8
+					color: Theme.panel
+					border.color: Theme.border
+				}
+
 				delegate: ItemDelegate {
 					id: entry
 
@@ -143,6 +172,7 @@ Pane {
 					objectName: "bus.interface"
 					Accessible.name: text
 					width: interfaces.width
+					leftPadding: 12
 					text: entry.modelData.name + "  —  " + entry.modelData.host + ":" + entry.modelData.port
 						+ (entry.modelData.tunnelling ? "" : qsTr("  (no tunnelling)"))
 					ToolTip.visible: hovered
@@ -163,7 +193,7 @@ Pane {
 					text: root.vm.discovering ? qsTr("Searching…")
 						: root.vm.discovered ? qsTr("No KNXnet/IP interface answered. Enter its address on the left.")
 						: qsTr("Search for KNXnet/IP interfaces on the local network")
-					opacity: 0.6
+					color: Theme.textSecondary
 				}
 			}
 		}

@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Kestrel.Controls
 import Kestrel.ViewModels
 
 /// Problems dock: validation results; click selects the subject, double-click opens it.
@@ -18,14 +19,15 @@ Pane {
 		anchors.fill: parent
 		spacing: 0
 
-		ToolBar {
+		PanelToolBar {
 			Layout.fillWidth: true
+			spacing: 6
 
 			Label {
 				objectName: "problems.summary"
-				anchors.verticalCenter: parent.verticalCenter
-				x: 8
+				Layout.leftMargin: 4
 				text: root.vm.summary
+				color: Theme.textSecondary
 			}
 		}
 
@@ -35,6 +37,7 @@ Pane {
 			Layout.fillWidth: true
 			syncView: table
 			clip: true
+			delegate: HeaderCell {}
 		}
 
 		TableView {
@@ -58,33 +61,33 @@ Pane {
 
 			ScrollBar.vertical: ScrollBar {}
 
-			delegate: Rectangle {
+			delegate: TableCell {
 				id: cell
 
 				required property string display
 				required property string severity
 				required property int row
 				required property int column
-				required property bool selected
 				required property bool current
 
-				implicitHeight: label.implicitHeight + 8
-				color: cell.selected ? table.palette.highlight : (cell.row % 2 ? table.palette.alternateBase : table.palette.base)
+				selected: cell.row === table.currentRow
+				firstColumn: cell.column === 0
+				mono: cell.column === 1 || cell.column === 3
+				tone: cell.column === 0 ? (cell.severity === "error" ? "error" : cell.severity === "warning" ? "warning" : "info") : ""
+				text: cell.display
+				label.leftPadding: cell.column === 0 ? 14 : 0
+				label.font.weight: cell.column === 0 ? Font.Medium : Font.Normal
 				Accessible.name: cell.display
 
-				Label {
-					id: label
-					anchors.fill: parent
-					anchors.leftMargin: 6
-					anchors.rightMargin: 6
-					verticalAlignment: Text.AlignVCenter
-					elide: Text.ElideRight
-					text: cell.column === 0 ? "● " + cell.display : cell.display
-					color: cell.selected ? table.palette.highlightedText
-						: cell.column !== 0 ? table.palette.text
-						: cell.severity === "error" ? "#d32f2f"
-						: cell.severity === "warning" ? "#ef6c00"
-						: "#1976d2"
+				// Severity dot in the first column.
+				Rectangle {
+					visible: cell.column === 0
+					x: 10
+					anchors.verticalCenter: parent.verticalCenter
+					width: 7
+					height: 7
+					radius: 3.5
+					color: Theme.toneColor(cell.tone)
 				}
 
 				TapHandler {

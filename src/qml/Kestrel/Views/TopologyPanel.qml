@@ -7,5 +7,6 @@ TreePanel {
 	accessibleName: qsTr("Topology")
 	toolActions: ["topology.addArea", "topology.addLine", "topology.addDevice"]
 	// Address | Medium | Download
-	secondaryColumnWidths: [52, 50, 74]
+	secondaryColumnWidths: [70, 68, 84]
+	monoColumns: [1]
 }

@@ -13,25 +13,29 @@ Pane {
 	required property CommissioningVM vm
 
 	objectName: "commissioningPanel"
-	padding: 8
+	padding: Theme.pad
 
 	GridLayout {
 		anchors.fill: parent
 		columns: root.width > 720 ? 2 : 1
-		columnSpacing: 16
-		rowSpacing: 6
+		columnSpacing: 24
+		rowSpacing: 8
 
 		ColumnLayout {
 			Layout.fillWidth: true
 			Layout.fillHeight: true
 			Layout.preferredWidth: 3
 			Layout.alignment: Qt.AlignTop
-			spacing: 6
+			spacing: 8
 
+			SectionLabel {
+				text: qsTr("Device")
+			}
 			Label {
 				objectName: "commissioning.device"
 				Layout.fillWidth: true
-				font.bold: true
+				font.weight: Font.DemiBold
+				font.pixelSize: 15
 				elide: Text.ElideRight
 				text: root.vm.deviceLabel !== "" ? root.vm.deviceLabel : qsTr("Select a device in Topology or Buildings")
 			}
@@ -40,7 +44,7 @@ Pane {
 				Layout.fillWidth: true
 				visible: text !== ""
 				text: root.vm.deviceStatus
-				opacity: 0.8
+				color: Theme.textSecondary
 				elide: Text.ElideRight
 			}
 
@@ -62,12 +66,14 @@ Pane {
 			RowLayout {
 				Layout.fillWidth: true
 				visible: !root.vm.connected
-				spacing: 6
+				spacing: 8
 
-				Label {
+				Badge {
+					tone: "neutral"
+					text: qsTr("Not connected to the bus")
+				}
+				Item {
 					Layout.fillWidth: true
-					text: qsTr("Not connected to the bus.")
-					opacity: 0.8
 				}
 				ActionButton {
 					actions: root.vm.actions
@@ -79,6 +85,12 @@ Pane {
 				objectName: "commissioning.progress"
 				Layout.fillWidth: true
 				visible: root.vm.operationActive
+				padding: Theme.pad
+				background: Rectangle {
+					radius: 8
+					color: Theme.panelAlt
+					border.color: Theme.border
+				}
 
 				ColumnLayout {
 					anchors.left: parent.left
@@ -90,9 +102,9 @@ Pane {
 						Layout.fillWidth: true
 						visible: root.vm.waitingForButton
 						text: qsTr("Press the programming button of the device now.")
-						font.bold: true
-						font.pixelSize: 16
-						color: "#ef6c00"
+						font.weight: Font.DemiBold
+						font.pixelSize: 15
+						color: Theme.warning
 						wrapMode: Text.Wrap
 					}
 					Label {
@@ -129,7 +141,8 @@ Pane {
 				Layout.fillWidth: true
 				visible: !root.vm.operationActive && text !== ""
 				text: root.vm.lastResult
-				color: root.vm.lastSucceeded ? "#2e7d32" : "#c62828"
+				color: root.vm.lastSucceeded ? Theme.success : Theme.error
+				font.weight: Font.Medium
 				wrapMode: Text.Wrap
 			}
 
@@ -152,10 +165,9 @@ Pane {
 			RowLayout {
 				Layout.fillWidth: true
 
-				Label {
+				SectionLabel {
 					Layout.fillWidth: true
 					text: qsTr("Log")
-					font.bold: true
 				}
 				ToolButton {
 					objectName: "commissioning.clearLog"
@@ -176,12 +188,25 @@ Pane {
 				Layout.minimumHeight: 40
 				clip: true
 				model: root.vm.log
+				topMargin: 6
+				bottomMargin: 6
+				leftMargin: 8
 				delegate: Label {
 					required property string modelData
-					width: logView.width
+					width: logView.width - 16
 					text: modelData
 					elide: Text.ElideRight
-					font.family: "monospace"
+					font.family: Theme.monoFamily
+					font.pixelSize: 12
+					lineHeight: 1.25
+				}
+				Rectangle {
+					parent: logView
+					anchors.fill: parent
+					z: -1
+					radius: 8
+					color: Theme.panelAlt
+					border.color: Theme.border
 				}
 				ScrollBar.vertical: ScrollBar {}
 
@@ -189,7 +214,7 @@ Pane {
 					anchors.centerIn: parent
 					visible: logView.count === 0
 					text: qsTr("No bus operation yet")
-					opacity: 0.6
+					color: Theme.textSecondary
 				}
 			}
 		}

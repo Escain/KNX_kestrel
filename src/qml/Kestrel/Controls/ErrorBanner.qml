@@ -10,7 +10,12 @@ Frame {
 	required property PanelVM vm
 
 	visible: vm.lastError !== ""
-	padding: 4
+	padding: 6
+	leftPadding: 12
+	background: Rectangle {
+		radius: Theme.radius
+		color: Theme.errorBg
+	}
 
 	RowLayout {
 		anchors.fill: parent
@@ -20,7 +25,7 @@ Frame {
 			objectName: "errorBanner.text"
 			Layout.fillWidth: true
 			text: banner.vm.lastError
-			color: "#c62828"
+			color: Theme.error
 			wrapMode: Text.Wrap
 		}
 		ToolButton {

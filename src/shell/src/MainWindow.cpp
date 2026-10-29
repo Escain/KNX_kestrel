@@ -3,6 +3,7 @@
 #include "kestrel/shell/DocumentArea.hpp"
 #include "kestrel/shell/QmlDock.hpp"
 #include "kestrel/shell/QmlHost.hpp"
+#include "kestrel/shell/Style.hpp"
 #include "kestrel/viewmodels/ActionRegistry.hpp"
 #include "kestrel/viewmodels/BuildingsPanelVM.hpp"
 #include "kestrel/viewmodels/BusConnectionVM.hpp"
@@ -23,6 +24,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLoggingCategory>
 #include <QMenu>
@@ -56,6 +58,7 @@ MainWindow::MainWindow(MainWindowOptions options, QWidget* parent)
 {
 	setObjectName(u"mainWindow"_s);
 	setDockOptions(QMainWindow::AnimatedDocks | QMainWindow::AllowTabbedDocks | QMainWindow::AllowNestedDocks);
+	setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
 	connect(m_engine.get(), &QQmlEngine::warnings, this,
 		[this](const QList<QQmlError>& warnings)
 		{
@@ -151,20 +154,43 @@ void MainWindow::createActions()
 					.arg(QApplication::applicationVersion()));
 		});
 
-	QIcon (*icon)(QIcon::ThemeIcon) = [](QIcon::ThemeIcon name) { return QIcon::fromTheme(name); };
-	a.action(u"file.new"_s)->setIcon(icon(QIcon::ThemeIcon::DocumentNew));
-	a.action(u"file.open"_s)->setIcon(icon(QIcon::ThemeIcon::DocumentOpen));
-	a.action(u"file.save"_s)->setIcon(icon(QIcon::ThemeIcon::DocumentSave));
-	a.action(u"edit.undo"_s)->setIcon(icon(QIcon::ThemeIcon::EditUndo));
+	// Tool bar labels.
 	a.action(u"edit.undo"_s)->setIconText(tr("Undo"));
-	a.action(u"edit.redo"_s)->setIcon(icon(QIcon::ThemeIcon::EditRedo));
 	a.action(u"edit.redo"_s)->setIconText(tr("Redo"));
-	a.action(u"edit.delete"_s)->setIcon(icon(QIcon::ThemeIcon::EditDelete));
+	a.action(u"catalog.addToLine"_s)->setIconText(tr("Add Product"));
+	a.action(u"device.programAddress"_s)->setIconText(tr("Program Address"));
+	a.action(u"device.download"_s)->setIconText(tr("Download"));
+	applyIcons();
 
 	auto updateSave = [this] { m_workspace->actions()->setEnabled(u"file.save"_s, m_workspace->session()->isDirty() || m_workspace->session()->path().isEmpty()); };
 	connect(m_workspace->session(), &viewmodels::ProjectSession::dirtyChanged, this, updateSave);
 	connect(m_workspace->session(), &viewmodels::ProjectSession::pathChanged, this, updateSave);
 	updateSave();
+}
+
+void MainWindow::applyIcons()
+{
+	viewmodels::ActionRegistry& a = *m_workspace->actions();
+	const std::pair<const char16_t*, const char*> icons[] = {{u"file.new", "new"}, {u"file.open", "open"},
+		{u"file.save", "save"}, {u"edit.undo", "undo"}, {u"edit.redo", "redo"}, {u"edit.delete", "delete"},
+		{u"catalog.addToLine", "add-product"}, {u"device.programAddress", "program"}, {u"device.download", "download"},
+		{u"bus.connect", "connect"}, {u"bus.groupMonitor", "monitor"}};
+	for (const auto& [id, name] : icons)
+		a.action(QString::fromUtf16(id))->setIcon(themedIcon(QString::fromLatin1(name)));
+	setWindowIcon(themedIcon(u"kestrel"_s, theme().accent));
+	if (m_toolBar)
+	{
+		// The primary action draws on the accent colour.
+		if (QWidget* button = m_toolBar->widgetForAction(a.action(u"device.download"_s)))
+			qobject_cast<QToolButton*>(button)->setIcon(themedIcon(u"download"_s, theme().onAccent));
+	}
+}
+
+void MainWindow::changeEvent(QEvent* event)
+{
+	if (event->type() == QEvent::PaletteChange)
+		applyIcons();
+	QMainWindow::changeEvent(event);
 }
 
 void MainWindow::createMenus()
@@ -219,16 +245,27 @@ void MainWindow::createMenus()
 	add(m_helpMenu, {u"help.about"_s});
 
 	QToolBar* toolBar = addToolBar(tr("Main"));
+	m_toolBar = toolBar;
 	toolBar->setObjectName(u"toolbar.main"_s);
-	toolBar->setToolButtonStyle(Qt::ToolButtonFollowStyle);
+	toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+	toolBar->setIconSize(QSize(16, 16));
+	toolBar->setMovable(false);
 	for (const QString& id : {u"file.new"_s, u"file.open"_s, u"file.save"_s, sep, u"edit.undo"_s, u"edit.redo"_s, sep,
-			 u"edit.delete"_s, sep, u"catalog.addToLine"_s, sep, u"device.programAddress"_s, u"device.download"_s})
+			 u"edit.delete"_s, sep, u"catalog.addToLine"_s})
 	{
 		if (id == sep)
 			toolBar->addSeparator();
 		else
 			toolBar->addAction(a.action(id));
 	}
+	// Commissioning sits at the right end; Download is the primary action.
+	auto* spacer = new QWidget(toolBar);
+	spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+	toolBar->addWidget(spacer);
+	toolBar->addAction(a.action(u"device.programAddress"_s));
+	toolBar->addAction(a.action(u"device.download"_s));
+	toolBar->widgetForAction(a.action(u"device.download"_s))->setObjectName(u"primaryAction"_s);
+	applyIcons();
 }
 
 QmlDock* MainWindow::addQmlDock(const QString& id, const QString& title, const QString& type, QObject* viewModel)
@@ -236,6 +273,8 @@ QmlDock* MainWindow::addQmlDock(const QString& id, const QString& title, const Q
 	auto* host = new QmlHost(m_engine.get(), u"Kestrel.Views"_s, type, {{u"vm"_s, QVariant::fromValue(viewModel)}});
 	auto* dock = new QmlDock(id, title, host, this);
 	m_docks.append(dock);
+	connect(dock, &QDockWidget::dockLocationChanged, this, &MainWindow::updateDockTitles, Qt::QueuedConnection);
+	connect(dock, &QDockWidget::topLevelChanged, this, &MainWindow::updateDockTitles, Qt::QueuedConnection);
 	return dock;
 }
 
@@ -300,7 +339,8 @@ void MainWindow::resetLayout()
 		d->setVisible(true);
 	topology->raise();
 	problems->raise();
-	resizeDocks({topology, properties}, {340, 300}, Qt::Horizontal);
+	updateDockTitles();
+	resizeDocks({topology, properties}, {380, 300}, Qt::Horizontal);
 	resizeDocks({problems}, {220}, Qt::Vertical);
 }
 
@@ -316,6 +356,29 @@ void MainWindow::restoreLayout()
 	{
 		qCInfo(lcShell) << "Saved layout is from another version: using the default layout";
 		resetLayout();
+	}
+	updateDockTitles();
+}
+
+void MainWindow::updateDockTitles()
+{
+	// A tabbed dock is named by its tab: its title bar would repeat the name. A dock on its own keeps it (and the
+	// handle to move it).
+	for (QmlDock* d : std::as_const(m_docks))
+	{
+		const bool tabbed = !d->isFloating() && !tabifiedDockWidgets(d).isEmpty();
+		QWidget* title = d->titleBarWidget();
+		if (tabbed && !title)
+		{
+			title = new QWidget(d);
+			(new QHBoxLayout(title))->setContentsMargins(0, 0, 0, 0); // a (0, 0) size hint
+			d->setTitleBarWidget(title);
+		}
+		else if (!tabbed && title)
+		{
+			d->setTitleBarWidget(nullptr);
+			delete title;
+		}
 	}
 }
 

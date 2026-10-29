@@ -11,7 +11,7 @@ include(KestrelOptions)
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Network)
 if(KESTREL_BUILD_GUI)
-	find_package(Qt6 6.8 REQUIRED COMPONENTS Gui Widgets Qml Quick QuickControls2 QuickWidgets)
+	find_package(Qt6 6.8 REQUIRED COMPONENTS Gui Widgets Svg Qml Quick QuickControls2 QuickWidgets)
 endif()
 qt_standard_project_setup(REQUIRES 6.8)
 if(QT_KNOWN_POLICY_QTP0001)

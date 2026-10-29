@@ -76,7 +76,8 @@ state machines with a manual clock: no sockets, no sleeps, no event loop.
 - QML is presentation only. All state, enablement and validation live in C++ view models, exposed via
   `QML_ELEMENT`/`QML_SINGLETON` (`qt_add_qml_module`), never via context properties.
 - Shortcuts belong to `QAction`s; context menus are native `QMenu`s (QML popups are clipped by QQuickWidget).
-- Style: Fusion for widgets and Qt Quick Controls, so both draw from the same `QPalette` (light and dark).
+- Style: Fusion for widgets and Qt Quick Controls, so both draw from the same `QPalette` (light and dark); the look
+  and its tokens are in specs/08-gui.md §6.
 - Cross-dock selection goes through `SelectionService` (an `EntityRef` list plus the origin view).
 - Item models apply ChangeSets incrementally (insert/remove/dataChanged) and never reset on an edit.
 

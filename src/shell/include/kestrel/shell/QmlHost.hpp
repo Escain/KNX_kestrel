@@ -36,6 +36,7 @@ Q_SIGNALS:
 	void loaded();
 
 protected:
+	bool event(QEvent* event) override;
 	void showEvent(QShowEvent* event) override;
 
 private:
