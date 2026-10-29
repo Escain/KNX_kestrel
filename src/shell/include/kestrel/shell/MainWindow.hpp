@@ -102,6 +102,7 @@ private:
 	void chooseAndSaveAs();
 	void updateTitle();
 	void updateStatus();
+	void updateBusStatus();
 	void restoreLayout();
 	void saveLayout();
 	void updateDockTitles();
@@ -121,6 +122,7 @@ private:
 	QToolBar* m_toolBar = nullptr;
 	QLabel* m_dirtyLabel = nullptr;
 	QToolButton* m_problemsButton = nullptr;
+	QToolButton* m_busButton = nullptr;
 	QPointer<QMenu> m_lastContextMenu;
 	QStringList m_qmlWarnings;
 };

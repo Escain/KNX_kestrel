@@ -189,7 +189,11 @@ void MainWindow::applyIcons()
 void MainWindow::changeEvent(QEvent* event)
 {
 	if (event->type() == QEvent::PaletteChange)
+	{
 		applyIcons();
+		if (m_busButton)
+			updateBusStatus();
+	}
 	QMainWindow::changeEvent(event);
 }
 
@@ -275,6 +279,7 @@ QmlDock* MainWindow::addQmlDock(const QString& id, const QString& title, const Q
 	m_docks.append(dock);
 	connect(dock, &QDockWidget::dockLocationChanged, this, &MainWindow::updateDockTitles, Qt::QueuedConnection);
 	connect(dock, &QDockWidget::topLevelChanged, this, &MainWindow::updateDockTitles, Qt::QueuedConnection);
+	connect(dock, &QDockWidget::visibilityChanged, this, &MainWindow::updateDockTitles, Qt::QueuedConnection);
 	return dock;
 }
 
@@ -307,8 +312,29 @@ void MainWindow::createStatusBar()
 				problems->raise();
 			}
 		});
+	// Bus connection state as a pill; a click shows the Bus Connection dock.
+	m_busButton = new QToolButton(this);
+	m_busButton->setObjectName(u"busStatus"_s);
+	m_busButton->setAutoRaise(true);
+	connect(m_busButton, &QToolButton::clicked, this, [this] { showDock(u"dock.busConnection"_s); });
+	connect(m_workspace->busConnection(), &viewmodels::BusConnectionVM::stateChanged, this, &MainWindow::updateBusStatus);
+	statusBar()->addPermanentWidget(m_busButton);
 	statusBar()->addPermanentWidget(m_problemsButton);
 	statusBar()->addPermanentWidget(m_dirtyLabel);
+	updateBusStatus();
+}
+
+void MainWindow::updateBusStatus()
+{
+	const viewmodels::BusConnectionVM* bus = m_workspace->busConnection();
+	const Theme& t = theme();
+	const QColor color = bus->isConnected() ? t.success : bus->isConnecting() ? t.warning : t.textSecondary;
+	m_busButton->setText(bus->isConnected() ? tr("\u25CF %1 \u00B7 %2").arg(bus->host(), bus->localAddress())
+			: bus->isConnecting()             ? tr("\u25CF Connecting\u2026")
+											  : tr("\u25CB Not connected"));
+	m_busButton->setToolTip(bus->stateText());
+	m_busButton->setStyleSheet(u"QToolButton#busStatus { color: %1; background: rgba(%2, %3, %4, 38); }"_s.arg(
+		color.name(), QString::number(color.red()), QString::number(color.green()), QString::number(color.blue())));
 }
 
 void MainWindow::resetLayout()
@@ -366,6 +392,9 @@ void MainWindow::updateDockTitles()
 	// handle to move it).
 	for (QmlDock* d : std::as_const(m_docks))
 	{
+		// A hidden dock is left alone (changing its title bar could show it again); it is updated when shown.
+		if (d->isHidden())
+			continue;
 		const bool tabbed = !d->isFloating() && !tabifiedDockWidgets(d).isEmpty();
 		QWidget* title = d->titleBarWidget();
 		if (tabbed && !title)

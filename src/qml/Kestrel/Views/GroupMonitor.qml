@@ -95,8 +95,9 @@ Pane {
 			model: root.vm.model
 			// Fixed columns; the GA name takes the rest.
 			columnWidthProvider: column => {
-				const widths = [90, 60, 80, 0, 130, 60, 100]
-				return column === 3 ? Math.max(80, table.width - 520) : widths[column]
+				// Time, source and destination fit their longest text ("23:59:59.999", "15.15.255", "31/7/255").
+				const widths = [104, 78, 92, 0, 124, 48, 80]
+				return column === 3 ? Math.max(60, table.width - 526) : widths[column]
 			}
 			onWidthChanged: forceLayout()
 			onRowsChanged: {
