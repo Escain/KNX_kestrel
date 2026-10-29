@@ -115,7 +115,15 @@ click, without hunting through manufacturers' websites.
   handed to `CatalogService::importFile`.
 - **CLI:** `kestrel-cli catalog search <words>` and `catalog fetch <order number> [--to dir]`; `--index` uses
   another index file.
-- Links go stale when manufacturers reorganise their sites; re-check the index before a release.
+- **Generators** (`tools/product-index/`, standard-library Python): one script per brand lists every KNX product
+  file the manufacturer publishes (ABB, Busch-Jaeger, Gira, Hager, Jung, MDT, Schneider/Merten, Siemens,
+  Theben, Zennio), downloads each file once in memory, reads every product in it and writes the entries;
+  `knxindex.py merge` keeps one entry per manufacturer id and order number (newest application, then the
+  smaller download). Only ETS4+ files are listed (no VD1–VD5); files behind a click-through licence are left
+  out, since Kestrel's Download would skip the licence. When a product is only in a manufacturer's complete
+  database, the entry points to that (large) file.
+- Links go stale when manufacturers reorganise their sites or rename files on a new version: re-run the
+  generators before a release and compare the counts.
 
 ## 7. Test data (ADR-009)
 `tests/data/catalog/M-FFFF/*.xml` are hand-written for the fake manufacturer M-FFFF: a 2-fold push button (MV-07B0,
