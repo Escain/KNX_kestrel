@@ -29,11 +29,11 @@ DocumentArea::DocumentArea(QQmlEngine* engine, viewmodels::Workspace* workspace,
 	connect(workspace->session(), &viewmodels::ProjectSession::projectReplaced, this,
 		[this]
 		{
-			// Device editors belong to the old project; the group monitor stays open.
+			// Device editors belong to the old project; the group monitor and the welcome tab stay open.
 			QStringList stale;
 			for (const Document& document : m_documents)
 			{
-				if (document.id != kGroupMonitorId)
+				if (document.id != kGroupMonitorId && document.id != kWelcomeId)
 					stale.append(document.id);
 			}
 			for (const QString& id : stale)

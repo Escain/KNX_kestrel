@@ -24,6 +24,7 @@
 #include "kestrel/viewmodels/ProjectSession.hpp"
 #include "kestrel/viewmodels/SelectionService.hpp"
 #include "kestrel/viewmodels/TopologyPanelVM.hpp"
+#include "kestrel/viewmodels/WelcomeVM.hpp"
 #include "kestrel/viewmodels/Workspace.hpp"
 
 #include <QAccessible>
@@ -31,6 +32,7 @@
 #include <QFile>
 #include <QLabel>
 #include <QMenu>
+#include <QPointer>
 #include <QQuickItem>
 #include <QSettings>
 #include <QStandardPaths>
@@ -225,6 +227,43 @@ private Q_SLOTS:
 		QVERIFY(problems);
 		QTRY_VERIFY(problems->text().contains(u"warning"_s));
 		screenshot(*window, u"open-project"_s);
+	}
+
+	void fr_prj_1__clickingARecentProjectOpensIt()
+	{
+		// Regression: opening used to close and recreate the welcome tab, so the clicked delegate was destroyed by
+		// its own click.
+		auto window = makeWindow();
+		QVERIFY(QTest::qWaitForWindowExposed(window.get()));
+		window->workspace()->welcome()->addRecent(m_temp.filePath(u"elsewhere"_s));
+		window->workspace()->welcome()->addRecent(m_projectDir);
+		window->workspace()->welcome()->addRecent(m_temp.filePath(u"other"_s));
+		shell::QmlHost* host = window->documents()->host(shell::DocumentArea::kWelcomeId);
+		QTRY_VERIFY(host->isLoaded());
+		QQuickItem* entry = nullptr;
+		QTRY_VERIFY((entry = [&]() -> QQuickItem*
+			{
+				// Repeater delegates are only children in the visual item tree.
+				QList<QQuickItem*> pending{qobject_cast<QQuickItem*>(host->rootObject())};
+				while (!pending.isEmpty())
+				{
+					QQuickItem* item = pending.takeFirst();
+					if (item->objectName() == u"welcome.recent" && item->property("modelData").toString() == m_projectDir)
+						return item;
+					pending.append(item->childItems());
+				}
+				return nullptr;
+			}()));
+		QTRY_VERIFY(entry->isVisible() && entry->width() > 0);
+		// The handler runs inside the delegate's clicked() signal, as a mouse click runs it. Nothing it reaches
+		// may destroy the delegate (Qt aborts: "destroyed while one of its QML signal handlers is in progress").
+		QPointer<QQuickItem> clicked(entry);
+		QPointer<shell::QmlHost> welcome(host);
+		QVERIFY(QMetaObject::invokeMethod(entry, "clicked"));
+		QVERIFY(clicked && welcome);
+		QTRY_COMPARE(window->workspace()->session()->path(), QDir::cleanPath(m_projectDir));
+		QTest::qWait(100);
+		QCOMPARE(window->workspace()->welcome()->recentProjects().first(), QDir::cleanPath(m_projectDir));
 	}
 
 	void fr_prj_2__undoRedoActionsDriveTheModelAndTheView()

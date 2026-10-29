@@ -82,7 +82,10 @@ MainWindow::MainWindow(MainWindowOptions options, QWidget* parent)
 	connect(m_workspace.get(), &viewmodels::Workspace::openDeviceRequested, this, &MainWindow::openDevice);
 	connect(m_workspace.get(), &viewmodels::Workspace::openGroupMonitorRequested, this, &MainWindow::openGroupMonitor);
 	connect(m_workspace->actions(), &viewmodels::ActionRegistry::contextMenuRequested, this, &MainWindow::showContextMenu);
-	connect(m_workspace->welcome(), &viewmodels::WelcomeVM::openRequested, this, &MainWindow::openProject);
+	// Queued: the request comes from a click handler in the welcome tab, and opening a project changes that tab
+	// (its recent list); QML items must not be destroyed while one of their handlers runs.
+	connect(m_workspace->welcome(), &viewmodels::WelcomeVM::openRequested, this, &MainWindow::openProject,
+		Qt::QueuedConnection);
 	connect(m_workspace.get(), &viewmodels::Workspace::importCatalogRequested, this, &MainWindow::chooseAndImportProducts);
 	connect(m_workspace.get(), &viewmodels::Workspace::showBusConnectionRequested, this,
 		[this] { showDock(u"dock.busConnection"_s); });
