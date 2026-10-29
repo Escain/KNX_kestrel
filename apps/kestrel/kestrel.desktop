@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Kestrel
+GenericName=KNX Configuration Tool
+Comment=Open configuration tool for KNX installations
+Exec=kestrel %f
+Icon=kestrel
+Terminal=false
+Categories=Development;Engineering;Qt;
+Keywords=KNX;ETS;building automation;home automation;
+StartupWMClass=kestrel
