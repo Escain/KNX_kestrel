@@ -422,7 +422,7 @@ UNIT_TEST(FR_COM_4__managementRemoteDisconnectFailsQueue)
 	const auto a = session.deviceDescriptorRead(kT0);
 	const auto b = session.memoryRead(0, 1, kT0);
 	(void)session.takeActions();
-	session.onFrame(fromDevice(Tpdu::disconnect()), kT0);
+	session.onFrame(fromDevice(Tpdu::disconnect()), kT0 + 600ms); // after the echo window
 	auto actions = session.takeActions();
 	auto failed = only<Session::Failed>(actions);
 	ASSERT_EQ(failed.size(), std::size_t{2});
@@ -447,4 +447,40 @@ UNIT_TEST(FR_COM_4__managementCloseCancels)
 	ASSERT_EQ(sent(actions), (std::vector<Tpdu>{Tpdu::disconnect()}));
 	ASSERT_EQ(only<Session::Disconnected>(actions),
 		(std::vector<Session::Disconnected>{{ManagementDisconnectReason::UserClose}}));
+}
+
+UNIT_TEST(FR_COM_4__managementIgnoresTheEchoOfItsOwnDisconnect)
+{
+	// A Merten push button answers the T_Disconnect sent before T_Connect with its own; the bus repeated it after
+	// our T_Connect, and the device then acknowledged the request.
+	auto session = newSession();
+	const auto id = session.deviceDescriptorRead(kT0);
+	(void)session.takeActions();
+	session.onFrame(fromDevice(Tpdu::disconnect()), kT0 + 20ms);
+	session.onFrame(fromDevice(Tpdu::disconnect()), kT0 + 40ms);
+	session.tick(kT0 + 100ms);
+	ASSERT(session.takeActions().empty());
+	session.onFrame(fromDevice(Tpdu::ack(0)), kT0 + 120ms);
+	session.onFrame(fromDevice(Tpdu::dataConnected(0, deviceDescriptorResponse(0, hex("07 05")))), kT0 + 130ms);
+	session.tick(kT0 + 700ms);
+	const auto actions = session.takeActions();
+	ASSERT_EQ(only<Session::Completed>(actions), (std::vector<Session::Completed>{{id, hex("07 05")}}));
+	ASSERT(only<Session::Disconnected>(actions).empty());
+}
+
+UNIT_TEST(FR_COM_4__managementEarlyDisconnectWithoutAckClosesAfterTheEchoWindow)
+{
+	// A device busy with another partner refuses the connection the same way, but never acknowledges.
+	auto session = newSession();
+	const auto id = session.deviceDescriptorRead(kT0);
+	(void)session.takeActions();
+	session.onFrame(fromDevice(Tpdu::disconnect()), kT0 + 20ms);
+	session.tick(kT0 + 400ms);
+	ASSERT(session.takeActions().empty());
+	session.tick(kT0 + 500ms);
+	const auto actions = session.takeActions();
+	ASSERT_EQ(only<Session::Failed>(actions).size(), std::size_t{1});
+	ASSERT_EQ(only<Session::Failed>(actions)[0].id, id);
+	ASSERT_EQ(only<Session::Disconnected>(actions),
+		(std::vector<Session::Disconnected>{{ManagementDisconnectReason::RemoteDisconnect}}));
 }

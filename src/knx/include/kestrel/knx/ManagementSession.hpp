@@ -43,6 +43,10 @@ struct ManagementSessionConfig
 	/// Time for the application response once the request was acknowledged.
 	Duration responseTimeout = std::chrono::seconds(3);
 	Duration idleTimeout = std::chrono::seconds(6);
+	/// Some devices answer the T_Disconnect sent before T_Connect with their own, and the bus may repeat it after
+	/// our T_Connect. A T_Disconnect this soon after connecting, before any T_ACK, is held: a T_ACK within the
+	/// window shows it was that echo; otherwise it closes the connection when the window ends.
+	Duration disconnectEchoWindow = std::chrono::milliseconds(500);
 	std::uint8_t maxMemoryChunk = 12;
 };
 
@@ -187,6 +191,8 @@ private:
 	TimePoint m_deadline{};
 	std::optional<Apdu> m_earlyResponse; ///< response that overtook the T_ACK
 	TimePoint m_lastActivity{};
+	TimePoint m_connectedAt{};
+	bool m_heldDisconnect = false; ///< a T_Disconnect inside the echo window, before any T_ACK
 };
 
 std::ostream& operator<<(std::ostream& os, const ManagementSession::SendFrame& action);

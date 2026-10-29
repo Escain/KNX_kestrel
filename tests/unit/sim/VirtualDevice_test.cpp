@@ -183,6 +183,9 @@ UNIT_TEST(FR_COM_4__deviceRefusesSecondConnection)
 	std::vector<ManagementSession::Action> results;
 	const auto id = session.deviceDescriptorRead(kT0);
 	simtest::drive(session, second, results);
+	// The refusal comes right after T_Connect: it takes effect when the disconnect echo window ends.
+	session.tick(kT0 + std::chrono::seconds(1));
+	simtest::drive(session, second, results);
 	ASSERT_EQ(only<ManagementSession::Failed>(results).size(), std::size_t{1});
 	ASSERT_EQ(only<ManagementSession::Failed>(results)[0].id, id);
 	ASSERT_EQ(only<ManagementSession::Disconnected>(results),

@@ -139,6 +139,8 @@ void ManagementSession::startNext(TimePoint now)
 		m_sendSeq = 0;
 		m_recvSeq = 0;
 		m_anyAcked = false;
+		m_connectedAt = now;
+		m_heldDisconnect = false;
 		// A connection left open by an earlier client run with our address (crash, interface teardown
 		// before the T_Disconnect went out) would keep the device's sequence numbers, so the device would
 		// take our first request for a repetition and never answer. A T_Disconnect from anyone but the
@@ -191,6 +193,7 @@ void ManagementSession::onAcked(TimePoint now)
 {
 	m_sendSeq = nextSeq(m_sendSeq);
 	m_anyAcked = true;
+	m_heldDisconnect = false;
 	// A response that overtook the T_ACK (possibly across repetitions) belongs to this exchange.
 	auto early = std::move(m_earlyResponse);
 	m_earlyResponse.reset();
@@ -412,6 +415,13 @@ void ManagementSession::onFrame(const cemi::LData& frame, TimePoint now)
 	{
 	case TpduType::Disconnect:
 	{
+		// Seen on a Merten push button: its answer to our T_Disconnect, repeated on the bus, arrived after our
+		// T_Connect, and the device then acknowledged the request.
+		if (!m_anyAcked && now - m_connectedAt < m_config.disconnectEchoWindow)
+		{
+			m_heldDisconnect = true;
+			return;
+		}
 		failAll(Error{ErrorCode::ProtocolError, "connection closed by the device"});
 		disconnect(ManagementDisconnectReason::RemoteDisconnect, false);
 		return;
@@ -482,6 +492,13 @@ void ManagementSession::onFrame(const cemi::LData& frame, TimePoint now)
 
 void ManagementSession::tick(TimePoint now)
 {
+	if (m_heldDisconnect && now - m_connectedAt >= m_config.disconnectEchoWindow)
+	{
+		m_heldDisconnect = false;
+		failAll(Error{ErrorCode::ProtocolError, "connection closed by the device"});
+		disconnect(ManagementDisconnectReason::RemoteDisconnect, false);
+		return;
+	}
 	if (m_phase == Phase::WaitAck && now >= m_deadline)
 	{
 		if (m_operations.front().kind == Kind::Restart)
